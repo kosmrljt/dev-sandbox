@@ -2,6 +2,8 @@
 
 **Run AI coding agents in isolated Podman containers with krun microVMs.**
 
+For Linux distributions with Podman support. Developed and tested on Fedora 44.
+
 One self-contained bash script. No dependencies beyond Podman and crun-krun. Configure profiles, build, run — everything in a single file.
 
 ## Why
@@ -320,8 +322,7 @@ DEV_SANDBOX_STORAGE="/mnt/disk2/podman" dev-sandbox  # Different storage
 
 ## Requirements
 
-- **Fedora 40+** (or any distro with Podman 4.x+ and crun-krun)
-- **Podman** — `sudo dnf install podman`
+- **Podman 4.x+** — `sudo dnf install podman` (Fedora/RHEL) or equivalent
 - **crun-krun** — `sudo dnf install crun-krun` (for krun microVM mode)
 - **passt** — usually installed with crun-krun (for krun networking)
 
@@ -346,7 +347,7 @@ Optional:
 
 Inspired by the [Fedora Magazine article on sandboxing AI agents with microVMs](https://fedoramagazine.org/sandbox-ai-coding-agents-with-microvms-on-fedora-linux/).
 
-The script was developed through iterative pair programming with Claude (Anthropic) — Claude wrote the code, I tested on real hardware and directed the design. Each issue found on the actual system led to a fix, resulting in a single script that encapsulates the non-obvious knowledge needed to run AI agents in properly isolated containers.
+The script was developed through iterative pair programming with Claude (Anthropic) — Claude wrote the code, I tested on real hardware and directed the design.
 
 ## Author
 
@@ -355,4 +356,3 @@ Tomaž Košmrlj
 ## License
 
 MIT
-
