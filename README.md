@@ -171,7 +171,7 @@ Every HTTP request, every DNS query visible on the host proxy. Nothing bypasses.
 │  │  └── Switch to dev user → bash                         │  │
 │  │                                                        │  │
 │  │  Mounts:                                               │  │
-│  │  ├── /app/project-hash ← bind mount (project dir)     │  │
+│  │  ├── /app/project-hash ← bind mount (project dir)      │  │
 │  │  ├── ~/.local ← volume (pip, scripts, dotfiles)        │  │
 │  │  ├── /etc/sandbox ← volume (SSH keys, configs)         │  │
 │  │  └── ~/.claude, ~/.cache, etc ← volumes (per profile)  │  │
