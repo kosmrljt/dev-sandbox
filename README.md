@@ -15,272 +15,173 @@ AI coding agents (Claude Code, Antigravity, Aider, etc.) need shell access and r
 - Prompt injection in a file can instruct the agent to run destructive commands
 - You have no visibility into what network connections the agent makes
 
-dev-sandbox fixes this by running each agent in its own isolated environment with only the current project directory visible.
+dev-sandbox runs each agent in its own isolated environment with only the current project directory visible.
 
 ## What you get
 
 - **Kernel-level isolation** — krun microVM runs its own Linux kernel, not just namespaces
 - **Project-only visibility** — only the current directory is mounted, nothing else from your filesystem
-- **Separate profiles** — production agent (Claude) and experimental agents (untrusted) have isolated credentials, volumes, and network rules
-- **Network control** — nftables firewall via passt networking, Privoxy HTTP→SOCKS5 proxy chain, per-destination allow rules
-- **SSH server** — connect from VS Code Remote, additional terminals, or use as SOCKS proxy tunnel
-- **Persistent config** — pip packages, credentials, SSH keys, dotfiles survive between sessions in named volumes
+- **Separate profiles** — production and experimental agents have isolated credentials, volumes, and network rules
+- **Network control** — nftables firewall, Privoxy HTTP→SOCKS5 proxy chain, per-destination allow rules
+- **SSH server** — connect from VS Code Remote or use as SOCKS proxy tunnel
+- **Persistent config** — pip packages, credentials, SSH keys, dotfiles survive between sessions
 - **One file** — everything is configured and runs from a single bash script
 
 ## Quick start
 
-### Prerequisites
-
 ```bash
+# Prerequisites
 sudo dnf install podman crun-krun
-```
 
-### Install
-
-```bash
+# Install
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
 chmod +x ~/.local/bin/dev-sandbox
 
-# Ensure ~/.local/bin is in PATH (add to ~/.bashrc if not)
-echo $PATH | grep -q "$HOME/.local/bin" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-```
-
-### First run
-
-```bash
-cd ~/my-project
-dev-sandbox          # builds image on first run, then opens shell
-```
-
-Inside the container:
-
-```bash
-claude               # start Claude Code
-exit                 # close container, project changes saved
-```
-
-## Usage scenarios
-
-### Basic — Claude Code with full internet
-
-```bash
+# Run (builds image on first run)
 cd ~/my-project
 dev-sandbox
 ```
 
-Agent has internet access, SSH server on port 2228 for VS Code.
-
-### Locked down — no outbound traffic
+## Usage examples
 
 ```bash
+# Basic — full internet, SSH for VS Code on port 2228
+dev-sandbox
+
+# Locked — no outbound traffic
 dev-sandbox --net locked
-```
 
-Container has no internet. Only loopback works. Use for reviewing untrusted code.
-
-### Filtered — outbound only through proxy
-
-```bash
+# Filtered — outbound only through proxy on host
 dev-sandbox --allow host.containers.internal:1080 \
-            --run-privoxy \
-            --privoxy-socks host.containers.internal:1080
-```
+            --allow host.containers.internal:22 \
+            --run-privoxy --privoxy-socks host.containers.internal:1080
 
-All traffic forced through Privoxy → SOCKS5 proxy on host. Direct connections blocked. DNS queries go through SOCKS (forward-socks5t). Run a SOCKS5 proxy on the host to monitor all connections.
-
-### Multiple allowed destinations
-
-```bash
-dev-sandbox --allow host.containers.internal:1080 \
-            --allow host.containers.internal:22
-```
-
-Firewall allows only these specific host:port pairs. Everything else dropped.
-
-### Research profile — untrusted agents
-
-```bash
+# Research profile — separate credentials and volumes
 dev-sandbox -p research
-```
 
-Separate credentials, separate volumes, separate network rules. A compromised pip package in research cannot read Claude credentials.
-
-### VS Code Remote SSH
-
-```bash
+# VS Code Remote SSH with key auth
 dev-sandbox --ssh-key ~/.ssh/id_ed25519.pub
-```
 
-Then in VS Code: `Remote-SSH: Connect to Host` → `ssh -p 2228 dev@localhost`
-
-### Standard container (no microVM)
-
-```bash
+# Standard container instead of microVM
 dev-sandbox --no-krun
-```
 
-Uses host kernel instead of krun microVM. Required for nftables firewall without passt. Faster startup, less isolation.
-
-### Resource limits
-
-```bash
+# Resource limits (works for both krun and containers)
 dev-sandbox --ram 8192 --cpus 8
+
+# Kill active session and restart
+dev-sandbox --force
 ```
-
-Works for both krun (VM memory/CPU) and standard containers (cgroup limits).
-
-### Full proxy chain with monitoring
-
-```bash
-# Terminal 1: SOCKS5 proxy on host (monitor connections)
-microsocks -p 1080
-
-# Terminal 2: sandbox with everything locked down
-dev-sandbox -p research \
-    --allow host.containers.internal:1080 \
-    --run-privoxy \
-    --privoxy-socks host.containers.internal:1080
-```
-
-Every HTTP request, every DNS query visible on the host proxy. Nothing bypasses.
 
 ## Architecture
 
 ```
-┌─ Host ───────────────────────────────────────────────────────┐
-│                                                              │
-│  dev-sandbox.sh                                              │
-│  ├── Configuration (profiles, packages, hooks)               │
-│  ├── Scaffold (generates Dockerfile, entrypoint.sh)          │
-│  ├── Build (podman build → base image → profile image)       │
-│  └── Run (podman run → krun microVM or container)            │
-│                                                              │
-│  ┌─ krun microVM (or container) ──────────────────────────┐  │
-│  │                                                        │  │
-│  │  entrypoint.sh (PID 1, root)                           │  │
-│  │  ├── Generate sudo password                            │  │
-│  │  ├── Fix volume ownership                              │  │
-│  │  ├── Generate defaults (first run)                     │  │
-│  │  │   ├── /etc/sandbox/startup.sh (root hooks)          │  │
-│  │  │   ├── /etc/sandbox/wrappers/* (command wrappers)    │  │
-│  │  │   └── ~/.local/etc/* (user dotfiles)                │  │
-│  │  ├── Run startup hooks                                 │  │
-│  │  ├── Start sshd (if configured)                        │  │
-│  │  ├── Start Privoxy (if configured)                     │  │
-│  │  ├── Configure nftables firewall (if configured)       │  │
-│  │  └── Switch to dev user → bash                         │  │
-│  │                                                        │  │
-│  │  Mounts:                                               │  │
-│  │  ├── /app/project-hash ← bind mount (project dir)      │  │
-│  │  ├── ~/.local ← volume (pip, scripts, dotfiles)        │  │
-│  │  ├── /etc/sandbox ← volume (SSH keys, configs)         │  │
-│  │  └── ~/.claude, ~/.cache, etc ← volumes (per profile)  │  │
-│  │                                                        │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  Volumes (persist between sessions):                         │
-│  ├── claude-sandbox-pip          ~/.local                    │
-│  ├── claude-sandbox-rootconf     /etc/sandbox                │
-│  ├── claude-sandbox-claude       ~/.claude                   │
-│  ├── claude-sandbox-cache        ~/.cache                    │
-│  ├── research-sandbox-pip        ~/.local                    │
-│  ├── research-sandbox-rootconf   /etc/sandbox                │
-│  ├── research-sandbox-gemini     ~/.gemini                   │
-│  └── ...                                                     │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+┌─ Host ─────────────────────────────────────────────────────┐
+│                                                            │
+│  dev-sandbox.sh                                            │
+│  ├── Configuration (profiles, packages, hooks)             │
+│  ├── Scaffold (generates Dockerfile, entrypoint.sh)        │
+│  ├── Build (podman build → base image → profile image)     │
+│  └── Run (podman run → krun microVM or container)          │
+│                                                            │
+│  ┌─ krun microVM (or container) ───────────────────────┐   │
+│  │                                                     │   │
+│  │  entrypoint.sh (PID 1, root)                        │   │
+│  │  ├── Generate sudo password                         │   │
+│  │  ├── Fix volume ownership                           │   │
+│  │  ├── Run startup hooks                              │   │
+│  │  ├── Install command wrappers                       │   │
+│  │  ├── Generate user dotfiles (first run)             │   │
+│  │  ├── Start sshd, Privoxy (if configured)            │   │
+│  │  ├── Configure nftables firewall (if configured)    │   │
+│  │  └── Switch to dev user → bash                      │   │
+│  │                                                     │   │
+│  │  Mounts:                                            │   │
+│  │  ├── /app/project-hash ← project dir (bind mount)   │   │
+│  │  ├── ~/.local ← pip, scripts, dotfiles (volume)     │   │
+│  │  ├── /etc/sandbox ← SSH keys, configs (volume)      │   │
+│  │  └── ~/.claude, ~/.cache, ... (per-profile volumes) │   │
+│  │                                                     │   │
+│  └─────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### Two-layer image build
+### Image layers
 
 ```
 fedora:44                          Base OS
     ↓
-dev-sandbox-base                   Common packages, tools, user setup, SSH, Privoxy
+dev-sandbox-base                   Common: packages, SSH, Privoxy, user setup
     ↓                  ↓
 claude-sandbox-krun    research-sandbox-krun
-Claude Code agent      Antigravity, untrusted agents
 ```
 
-Base image is built once and shared. Profile images add only agent-specific packages. Layers are deduplicated — total disk usage is much less than the sum of image sizes.
+Base image is built once and shared. Profile images add only agent-specific packages.
 
 ### Network modes
 
-```
---net open (default)     Full internet access
-                         App ──→ Internet
+| Mode | Effect |
+|---|---|
+| `--net open` (default) | Full internet access |
+| `--net locked` | No outbound traffic, loopback only |
+| `--allow host:port` | Only specified destinations, everything else blocked |
 
---net locked             No outbound traffic
-                         App ──→ ✗ blocked
+When Privoxy is enabled with `forward-socks5t`, DNS queries go through the SOCKS proxy — nothing leaks.
 
---allow host:port        Only specified destinations
-                         App ──→ Privoxy :8118
-                              ──→ SOCKS5 host:1080 ✓
-                              ──→ anything else ✗ blocked
-```
-
-With `--allow`, nftables drops all outbound traffic except loopback and explicitly allowed destinations. When Privoxy is enabled with `forward-socks5t`, DNS queries also go through the SOCKS proxy — nothing leaks.
-
-### Podman with krun vs without
+### krun microVM vs standard container
 
 | | krun microVM | Standard container |
 |---|---|---|
 | Isolation | Own kernel (VM boundary) | Shared kernel (namespaces) |
-| Networking | passt (krun.use_passt=1) | Standard podman networking |
 | nftables firewall | Works with passt | Works natively |
-| SSH server | Works | Works |
-| Overhead | ~200ms startup, fixed RAM | Minimal |
-| Container escape | Requires VM escape (hard) | Requires namespace escape (easier) |
+| Container escape | Requires VM escape | Requires namespace escape |
 | `podman exec` | Not supported | Works |
+| Overhead | ~200ms startup, fixed RAM | Minimal |
 
-Default is krun with passt networking, which provides both VM-level isolation and working nftables firewall. Use `--no-krun` when you need `podman exec`, lower overhead, or specific device access.
+Default is krun with passt networking. Use `--no-krun` when you need `podman exec` or lower overhead.
 
 ## Configuration
 
-All configuration is at the top of the script. Edit the profile section to customize:
+All configuration is at the top of the script:
 
 ```bash
 # ─── My Custom Profile ─────────────────────────
 PROFILE_custom_DESCRIPTION="My custom sandbox"
-PROFILE_custom_AGENTS=(
-    'pip install --user some-agent'
-)
+PROFILE_custom_AGENTS=('pip install --user some-agent')
 PROFILE_custom_DNF=(extra-package)
 PROFILE_custom_SSH_PORT=2230
 PROFILE_custom_RUN_PRIVOXY=false
 PROFILE_custom_VOLUMES=(.cache .config)
-PROFILE_custom_PODMAN_ARGS=(
-    --tmpfs /var/log:rw,size=50m,mode=1777
-)
+PROFILE_custom_PODMAN_ARGS=(--tmpfs /var/log:rw,size=50m,mode=1777)
 PROFILE_custom_ROOT_STARTUP=''
 PROFILE_custom_ROOT_WRAPPERS=()
-PROFILE_custom_DEV_DOTFILES=(
-    'bashrc.local|alias ll="ls -la"'
-)
+PROFILE_custom_DEV_DOTFILES=('bashrc.local|alias ll="ls -la"')
 
-# Add to registry
 ALL_PROFILES=(claude research custom)
 ```
-
-Then build and run:
 
 ```bash
 dev-sandbox -p custom build -f
 dev-sandbox -p custom
 ```
 
-### Persistence model
+Environment variable overrides:
+
+```bash
+DEV_SANDBOX_RAM=8192 dev-sandbox
+DEV_SANDBOX_CPUS=8 dev-sandbox
+DEV_SANDBOX_STORAGE="/mnt/disk2/podman" dev-sandbox
+```
+
+### What persists between sessions
 
 | What | Persists? | Where |
 |---|---|---|
 | Project files | ✓ | Bind mount back to host |
-| pip packages | ✓ | Named volume (~/.local) |
-| Agent credentials | ✓ | Named volume (~/.claude, ~/.gemini, etc.) |
-| SSH host keys | ✓ | Named volume (/etc/sandbox) |
-| User dotfiles | ✓ | Named volume (~/.local/etc/) |
-| Privoxy/firewall config | ✓ | Named volume (/etc/sandbox) |
+| pip packages | ✓ | Volume (~/.local) |
+| Agent credentials | ✓ | Volume (~/.claude, ~/.gemini, etc.) |
+| SSH host keys | ✓ | Volume (/etc/sandbox) |
+| User dotfiles | ✓ | Volume (~/.local/etc/) |
 | dnf install packages | ✗ | Add to profile config, rebuild |
-| Files outside /app and /home/dev | ✗ | Lost on exit |
 
 ### CLI reference
 
@@ -312,42 +213,31 @@ Management:
   dev-sandbox clean --purge     Remove everything including volumes
 ```
 
-### Environment variable overrides
-
-```bash
-DEV_SANDBOX_RAM=8192 dev-sandbox                    # More RAM
-DEV_SANDBOX_CPUS=8 dev-sandbox                      # More CPUs
-DEV_SANDBOX_STORAGE="/mnt/disk2/podman" dev-sandbox  # Different storage
-```
-
 ## Requirements
 
 - **Podman 4.x+** — `sudo dnf install podman` (Fedora/RHEL) or equivalent
 - **crun-krun** — `sudo dnf install crun-krun` (for krun microVM mode)
-- **passt** — usually installed with crun-krun (for krun networking)
+- **passt** — usually installed with crun-krun
 
 Optional:
 - **gocryptfs** — for encrypted project directories (`gocryptfs -allow_other` required)
 - **btrfs** — for project directory quotas and instant snapshots
 
-
 ## Known limitations
 
-- **krun without passt**: Default TSI networking bypasses nftables entirely. The script enables `krun.use_passt=1` by default to avoid this.
-- **krun TSI TCP limit**: Without passt, concurrent TCP connections are limited to ~3/s ([libkrun #511](https://github.com/libkrun/libkrun/issues/511)). Not an issue with passt enabled.
-- **No `podman exec` with krun**: Use SSH or tmux for additional terminals inside the VM.
-- **tty warning**: `tty: ttyname error` may appear on krun startup. Cosmetic only, does not affect functionality.
-- **gocryptfs directories**: Require `gocryptfs -allow_other` mount flag and `user_allow_other` in `/etc/fuse.conf` for Podman's user namespace to access the FUSE mount.
+- **krun without passt**: TSI networking bypasses nftables. The script enables `krun.use_passt=1` by default.
+- **No `podman exec` with krun**: Use SSH or tmux for additional terminals.
+- **tty warning**: `tty: ttyname error` may appear on krun startup. Cosmetic only.
 
 ## Related
 
-- [urllight](https://github.com/kosmrljt/urllight) — SOCKS5 proxy with live terminal dashboard. Run it on the host, route sandbox traffic through it, see every connection and DNS query in real time. Designed to complement dev-sandbox for network analysis and building firewall allowlists from observed traffic.
+[urllight](https://github.com/kosmrljt/urllight) — SOCKS5 proxy with live terminal dashboard. Route sandbox traffic through it to see every connection and DNS query.
 
 ## Development
 
 Inspired by the [Fedora Magazine article on sandboxing AI agents with microVMs](https://fedoramagazine.org/sandbox-ai-coding-agents-with-microvms-on-fedora-linux/).
 
-The script was developed through iterative pair programming with Claude (Anthropic) — Claude wrote the code, I tested on real hardware and directed the design.
+The script was developed through iterative pair programming with Claude (Anthropic) — Claude wrote the code, I tested on real hardware and directed the design. Each issue found on the actual system led to a fix, resulting in a single script that encapsulates the practical knowledge needed to run code in isolated Podman containers with krun microVMs.
 
 ## Author
 
