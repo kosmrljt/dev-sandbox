@@ -223,6 +223,11 @@ Optional:
 - **gocryptfs** — for encrypted project directories (`gocryptfs -allow_other` required)
 - **btrfs** — for project directory quotas and instant snapshots
 
+## Security notes
+
+- **`.git/hooks` escape path**: The project directory is bind-mounted read-write. An agent can write git hooks (e.g. `pre-commit`, `post-checkout`) that execute **on the host** next time you run git in that directory. Same applies to `.envrc`, `Makefile` targets, `package.json` scripts, and `.vscode/tasks.json`. Review changes in your project directory after sandbox sessions.
+- **Persistent volumes are execution paths**: Files in `~/.local/bin`, `~/.local/etc/bashrc.local`, and `/etc/sandbox/startup.sh` persist across sessions and execute on every startup. A compromised session can plant code that runs on every subsequent start. The mental model "it's a container, I'll just restart it" does not fully apply.
+
 ## Known limitations
 
 - **krun without passt**: TSI networking bypasses nftables. The script enables `krun.use_passt=1` by default.
