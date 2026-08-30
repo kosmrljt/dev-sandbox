@@ -25,7 +25,7 @@ What this does **not** prevent: an agent can write to `.git/hooks` and persisten
 # Prerequisites (Fedora/RHEL)
 sudo dnf install podman crun-krun
 
-# Prerequisites (Ubuntu/Debian - without krun microVM)
+# Prerequisites (Ubuntu/Debian - without krun microVM: --no-krun) 
 sudo apt install podman  
 
 # Install
