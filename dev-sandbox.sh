@@ -68,7 +68,6 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-
 # ═══════════════════════════════════════════════════════════════════════
 #  COMMON CONFIGURATION
 #
@@ -214,7 +213,7 @@ setw -g window-status-style "fg=colour8"
 
 PROFILE_claude_DESCRIPTION="Claude Code — production agent"
 PROFILE_claude_COLOR="32"               # Green prompt — trusted agent
-PROFILE_claude_SSH_PORT=2228
+#PROFILE_claude_SSH_PORT=2228
 PROFILE_claude_AGENTS=(
     'curl -fsSL https://claude.ai/install.sh | bash'
 )
