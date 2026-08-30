@@ -96,24 +96,23 @@ graph LR
 ## Usage examples
 
 ```bash
-# Locked — no outbound traffic
-dev-sandbox --net locked
+# Basic — default profile
+dev-sandbox
 
-# All traffic through SOCKS proxy on host (shortcut)
+# Different profile
+dev-sandbox -p research
+
+# All traffic through SOCKS proxy on host
 dev-sandbox --proxy 1080
 
-# Same as above, explicit form
-dev-sandbox --allow host.containers.internal:1080 \
-            --run-privoxy --privoxy-socks host.containers.internal:1080
+# No outbound traffic
+dev-sandbox --net locked
 
-# Allow a port to any destination
-dev-sandbox --allow :8000
+# SSH for VS Code (requires --no-krun)
+dev-sandbox --no-krun --ssh-port 2228 --ssh-key ~/.ssh/id_ed25519.pub
 
-# Pass env from host (never in script or CLI history)
+# Pass API key from host (never in script or CLI history)
 dev-sandbox --env ANTHROPIC_API_KEY
-
-# Set env with value
-dev-sandbox --env OLLAMA_HOST=http://host.containers.internal:11434
 
 # Resource limits
 dev-sandbox --ram 8192 --cpus 8
