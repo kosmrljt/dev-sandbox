@@ -23,8 +23,9 @@ What this does **not** prevent: an agent can write to `.git/hooks` and persisten
 
 ```bash
 # Prerequisites
-sudo dnf install podman
-sudo dnf install crun-krun       # optional, for krun microVM mode
+sudo dnf install podman crun-krun
+
+# Ubuntu, without krun microVM mode: sudo apt install podman    
 
 # Install
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
