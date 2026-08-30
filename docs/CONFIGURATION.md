@@ -31,9 +31,9 @@ All variables use the pattern `DEFAULT_<NAME>` / `PROFILE_<profile>_<NAME>`:
 | `PRIVOXY_SOCKS` | host:port | Where Privoxy forwards traffic |
 | `RAM` | int | Memory limit in MiB |
 | `CPUS` | int | CPU cores limit |
-| `COLOR` | int | Prompt color code (0=none, 31=red, 32=green, 33=yellow, 34=blue) |
-| `ENV` | array | Extra env variables set in container (`"KEY=VALUE"`) |
-| `ENV_PASS` | array | Env variable names passed through from host — values stay out of script |
+| `COLOR` | int | Prompt color (0=none, 31=red, 32=green, 33=yellow, 34=blue, 35=purple) |
+| `ENV` | array | Env variables set in container (`"KEY=VALUE"`) |
+| `ENV_PASS` | array | Env variable names passed from host (values stay out of script) |
 | `VOLUMES` | array | Home directories to persist as named volumes |
 | `PODMAN_ARGS` | array | Extra arguments passed to `podman run` |
 | `ROOT_STARTUP` | string | Shell script run as root on every startup |
@@ -45,41 +45,37 @@ All variables use the pattern `DEFAULT_<NAME>` / `PROFILE_<profile>_<NAME>`:
 Override defaults without editing the script:
 
 ```bash
-DEV_SANDBOX_RAM=8192 dev-sandbox                     # More RAM
-DEV_SANDBOX_CPUS=8 dev-sandbox                       # More CPUs
+DEV_SANDBOX_RAM=8192 dev-sandbox                      # More RAM
+DEV_SANDBOX_CPUS=8 dev-sandbox                        # More CPUs
 DEV_SANDBOX_STORAGE="/mnt/disk2/podman" dev-sandbox   # Different storage path
 ```
 
 ## What persists between sessions
 
-| What | Persists? | Where |
-|---|---|---|
-| Project files | ✓ | Bind mount back to host |
-| pip packages | ✓ | Volume (~/.local) |
-| Agent credentials | ✓ | Volume (~/.claude, ~/.gemini, etc.) |
-| SSH host keys | ✓ | Volume (/etc/sandbox) |
-| User dotfiles | ✓ | Volume (~/.local/etc/) |
-| Privoxy/firewall config | ✓ | Volume (/etc/sandbox) |
-| Bash history | ✓ | Volume (~/.local/etc/.bash_history) |
-| dnf install packages | ✗ | Add to profile config, rebuild |
-| Files outside project and home | ✗ | Lost on exit |
+| What | Where |
+|---|---|
+| Project files | Bind mount back to host |
+| pip packages, scripts | Volume (~/.local) |
+| Agent credentials | Volume (~/.claude, ~/.gemini, etc.) |
+| SSH host keys, startup hooks | Volume (/etc/sandbox) |
+| User dotfiles, bash history | Volume (~/.local/etc/) |
+| dnf packages | Add to profile config, rebuild |
+| Files outside /app and /home/dev | Lost on exit |
 
 ## Adding a new profile
 
-Minimal profile — only description and registration:
+Minimal — only description and registration:
 
 ```bash
 PROFILE_test_DESCRIPTION="My test sandbox"
-
 ALL_PROFILES=(claude research agy vncgui test)
 ```
 
 Everything else inherits from `DEFAULT_*`. Override as needed:
 
 ```bash
-PROFILE_test_COLOR="33"                  # Yellow prompt
+PROFILE_test_COLOR="33"
 PROFILE_test_SSH_PORT=2232
-PROFILE_test_USE_KRUN=false
 PROFILE_test_DNF=(htop strace)
 PROFILE_test_AGENTS=('pip install --user aider-chat')
 PROFILE_test_ENV=("OLLAMA_HOST=http://host.containers.internal:11434")
@@ -112,9 +108,9 @@ dev-sandbox build -f
 After changing startup hooks, wrappers, or dotfiles:
 
 ```bash
-podman volume rm claude-sandbox-rootconf   # regenerate root config
-podman volume rm claude-sandbox-pip        # regenerate dotfiles (also removes pip packages)
-dev-sandbox                                # regenerates on next run
+podman volume rm claude-sandbox-rootconf    # root hooks, wrappers
+podman volume rm claude-sandbox-local       # dotfiles (also removes pip packages)
+dev-sandbox                                 # regenerates on next run
 ```
 
 ## CLI reference
@@ -133,3 +129,20 @@ dev-sandbox clean [--purge]     Remove image [and volumes]
 dev-sandbox --version           Show version
 dev-sandbox help                Show all flags
 ```
+
+## Connecting to host services
+
+Inside the container, `localhost` is the container itself. To reach services on the host:
+
+```bash
+host.containers.internal
+```
+
+Examples:
+
+```bash
+curl http://host.containers.internal:11434/api/tags    # Ollama
+psql -h host.containers.internal -U myuser mydb        # PostgreSQL
+```
+
+Verify: `getent hosts host.containers.internal`
