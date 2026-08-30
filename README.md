@@ -61,6 +61,8 @@ dev-sandbox -p research             # empty template, add your agents
 
 dev-sandbox -p vncgui               # XFCE desktop
 vncviewer localhost:5901            # connect (password: sandbox)
+
+dev-sandbox -p claude --ssh-port 2228   # claude with SSH for VS Code
 ```
 
 Show resolved settings for any profile:
@@ -84,23 +86,11 @@ krun runs its own Linux kernel inside a microVM — a different isolation bounda
 Default is krun. Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```mermaid
-graph TB
-    subgraph Host
-        Script[dev-sandbox.sh]
-        Script -->|build| Base[Base Image<br/>fedora:44 + packages]
-        Base --> Claude[claude profile]
-        Base --> Research[research profile]
-        Base --> Agy[agy profile]
-        Base --> VNC[vncgui profile]
-        Script -->|run| Container
-        subgraph Container [krun microVM or Container]
-            Entry[entrypoint.sh]
-            Entry --> Services[sshd, Privoxy, nftables]
-            Entry --> Shell[dev user → bash]
-        end
-        Project[Project directory] -->|bind mount| Container
-        Volumes[Named volumes] -.->|persist| Container
-    end
+graph LR
+    Script[dev-sandbox.sh] -->|build| Image[Profile Image]
+    Script -->|run| Container
+    Container --- Volumes[Named Volumes]
+    Project[Project Dir] -->|bind mount| Container
 ```
 
 ## Usage examples
@@ -141,10 +131,8 @@ DEFAULT_SSH_PORT=0
 DEFAULT_COLOR="0"              # 31=red, 32=green, 33=yellow
 
 PROFILE_claude_COLOR="32"      # Green — trusted
-PROFILE_claude_SSH_PORT=2228
 
 PROFILE_research_COLOR="31"    # Red — untrusted
-PROFILE_research_USE_KRUN=true
 PROFILE_research_SSH_PORT=0    # No SSH → passt → firewall works
 
 ALL_PROFILES=(claude research agy vncgui)
