@@ -39,7 +39,6 @@ dev-sandbox
 
 The first run builds images (~1.6 GB, several minutes). Subsequent runs start in seconds. The default profile is configured for Claude Code — edit the script to change.
 
-![demo](docs/demo.gif)
 
 ## Profiles
 
