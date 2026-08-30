@@ -22,10 +22,11 @@ What this does **not** prevent: an agent can write to `.git/hooks` and persisten
 ## Quick start
 
 ```bash
-# Prerequisites
+# Prerequisites (Fedora/RHEL)
 sudo dnf install podman crun-krun
 
-# Ubuntu, without krun microVM mode: sudo apt install podman    
+# Prerequisites (Ubuntu/Debian - without krun microVM)
+sudo apt install podman  
 
 # Install
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
