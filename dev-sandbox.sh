@@ -20,7 +20,7 @@
 #    Runtime                 krun microVM (default) or standard container
 #
 #  Data persistence uses named Podman volumes:
-#    - pip volume:       ~/.local (pip packages, scripts, dotfiles)
+#    - local volume:     ~/.local (pip packages, scripts, dotfiles, history)
 #    - rootconf volume:  /etc/sandbox (SSH keys, startup hooks, wrappers)
 #    - extra volumes:    per-profile home dirs (.claude, .cache, etc.)
 #
@@ -41,7 +41,7 @@
 #
 #  KEY PODMAN PARAMETERS USED
 #  --------------------------
-#  --annotation run.oci.handler=krun    Use krun microVM runtime
+#  --annotation run.oci.handler=krun   Use krun microVM runtime
 #  --annotation krun.ram_mib=N         VM memory limit in MiB
 #  --annotation krun.cpus=N            VM CPU cores
 #  --annotation krun.use_passt=1       Use passt networking (enables nftables)
@@ -68,6 +68,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
+
 # ═══════════════════════════════════════════════════════════════════════
 #  COMMON CONFIGURATION
 #
@@ -79,13 +80,10 @@ set -euo pipefail
 SANDBOX_BASE="${HOME}/.dev-sandbox"     # Build files location
 BASE_IMAGE_NAME="dev-sandbox-base"      # Base podman image name
 DEFAULT_PROFILE="claude"                # Profile used without -p
+VERSION="1.1.0"                         # dev-sandbox version
 
 # Base OS
 BASE_OS="fedora:44"
-
-# Resources (override with env: DEV_SANDBOX_RAM=8192 dev-sandbox)
-RAM_MIB="${DEV_SANDBOX_RAM:-4096}"      # krun microVM RAM in MiB
-CPUS="${DEV_SANDBOX_CPUS:-4}"           # krun microVM CPU cores
 
 # Podman storage (empty = default ~/.local/share/containers/storage)
 # Set for a different disk: PODMAN_STORAGE="/mnt/disk2/podman"
@@ -93,29 +91,46 @@ PODMAN_STORAGE="${DEV_SANDBOX_STORAGE:-}"
 
 # ── Base image DNF packages (shared across all profiles) ──
 BASE_DNF_PACKAGES=(
-    # System
-    git vim nano curl unzip tar zip wget
-    procps-ng findutils which diffutils
-    util-linux sudo nftables
+    # Core system
+    util-linux sudo hostname procps-ng
+    findutils which diffutils less man-db
+
+    # Networking
     openssh-server openssh-clients
-    privoxy
-    iputils nmap iproute
+    curl wget nmap iputils iproute
+    bind-utils                          # dig, nslookup, host
+    net-tools                           # netstat, ifconfig
+    nftables privoxy
+    ca-certificates openssl             # TLS/HTTPS support
+
+    # File tools
+    git tar zip unzip xz gzip rsync
+    vim nano tree mc fzf
+    bat                                 # cat with syntax highlighting
+    fd-find                             # better find
+    ripgrep jq
 
     # Terminal
-    tmux tree jq ripgrep
-    htop mc fzf
+    tmux htop
 
     # Development
     nodejs npm
     python3 python3-pip python3-devel
-    gcc gcc-c++ make
+    gcc gcc-c++ make cmake
+    ShellCheck                          # bash script linting
 
-    # Tools
-    rclone fish xz gzip strace
+    # Debugging
+    strace ltrace
 
-    # DB clients
+    # Database clients
     sqlite mycli pgcli
     mariadb postgresql
+
+    # Shell
+    fish
+
+    # Cloud/sync
+    rclone
 )
 
 # ── Base image external tools (binary, not from DNF) ──
@@ -131,72 +146,89 @@ BASE_EXTERNAL_TOOLS=(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  PROFILE DEFAULTS
+#
+#  Default values for all profiles. Each profile only needs to
+#  override what differs. Less repetition, easier to add new profiles.
+# ═══════════════════════════════════════════════════════════════════════
+
+DEFAULT_USE_KRUN=true                   # krun microVM (false = standard container)
+DEFAULT_NET_MODE="open"                 # open, locked, filtered
+DEFAULT_SSH_PORT=0                      # 0 = no SSH server
+DEFAULT_SSH_KEY=""                      # Path to public key
+DEFAULT_RUN_PRIVOXY=false               # Privoxy HTTP proxy
+DEFAULT_PRIVOXY_SOCKS="host.containers.internal:1080"
+DEFAULT_RAM="${DEV_SANDBOX_RAM:-4096}"   # Override with: DEV_SANDBOX_RAM=8192 dev-sandbox
+DEFAULT_CPUS="${DEV_SANDBOX_CPUS:-4}"   # Override with: DEV_SANDBOX_CPUS=8 dev-sandbox
+DEFAULT_COLOR="0"                       # Prompt color (0=default, 32=green, 31=red, 33=yellow, 34=blue)
+DEFAULT_ENV=()                          # Extra env vars set in container (KEY=VALUE)
+DEFAULT_ENV_PASS=()                     # Env vars passed through from host (KEY only, no values in script)
+DEFAULT_VOLUMES=(.cache)
+DEFAULT_PODMAN_ARGS=(
+    --tmpfs /var/log:rw,size=50m,mode=1777
+    --tmpfs /tmp:rw,size=200m,mode=1777
+)
+DEFAULT_ROOT_STARTUP=''
+DEFAULT_ROOT_WRAPPERS=()
+DEFAULT_DEV_DOTFILES=(
+    'bashrc.local|# Override PATH — Fedora /etc/profile prepends ~/.local/bin on login
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$HOME/.claude/bin"
+
+# Persistent history (stored in local volume)
+export HISTFILE="$HOME/.local/etc/.bash_history"
+export HISTSIZE=10000
+export HISTFILESIZE=20000
+
+# Aliases
+alias ll="ls -la"
+alias la="ls -A"
+alias ..="cd .."
+alias ...="cd ../.."
+
+# tmux with custom config
+alias tmux="tmux -f ~/.local/etc/tmux.conf"
+'
+    'tmux.conf|# Minimal status bar
+set -g status-style "bg=default,fg=colour8"
+set -g status-left "#[fg=colour4]#S "
+set -g status-right "#[fg=colour8]%H:%M"
+set -g status-left-length 20
+setw -g window-status-current-style "fg=colour2"
+setw -g window-status-style "fg=colour8"
+'
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  PROFILES
 #
-#  Each profile defines a sandbox — agents, packages, services.
-#  New profile: copy a block, adjust, add the name to ALL_PROFILES.
+#  Each profile only defines what differs from defaults above.
+#  New profile: add overrides and the name to ALL_PROFILES.
 #
-#  Variables by level:
-#
-#    PROFILE_<name>_DESCRIPTION      Profile description
-#    PROFILE_<name>_AGENTS           Agent install commands
-#    PROFILE_<name>_DNF              Extra DNF packages (on top of base)
-#    PROFILE_<name>_TOOLS            Extra binary tools (on top of base)
-#    PROFILE_<name>_VOLUMES          Home dirs to persist (each gets a volume)
-#    PROFILE_<name>_PODMAN_ARGS      Extra podman run arguments
-#
-#    PROFILE_<name>_SSH_PORT         SSH server port (0 = disabled)
-#    PROFILE_<name>_RUN_PRIVOXY      Run Privoxy HTTP proxy (true/false)
-#    PROFILE_<name>_PRIVOXY_SOCKS    Where Privoxy forwards to (host:port)
-#
-#    ROOT level (rootconf volume, /etc/sandbox/):
-#    PROFILE_<name>_ROOT_STARTUP     Script run at boot (as root, before dev)
-#    PROFILE_<name>_ROOT_WRAPPERS    Commands in /usr/local/bin/ (name|script)
-#
-#    DEV level (.local volume, ~/.local/etc/):
-#    PROFILE_<name>_DEV_DOTFILES     Config files (name|content)
+#  All DEFAULT_* variables can be overridden per profile with
+#  PROFILE_<name>_<variable>. CLI flags override both.
 # ═══════════════════════════════════════════════════════════════════════
 
 
 # ─── Claude (default) ─────────────────────────────────────────────────
 
 PROFILE_claude_DESCRIPTION="Claude Code — production agent"
-
-# Agents — install commands run in Dockerfile
+PROFILE_claude_COLOR="32"               # Green prompt — trusted agent
+PROFILE_claude_SSH_PORT=2228
 PROFILE_claude_AGENTS=(
     'curl -fsSL https://claude.ai/install.sh | bash'
 )
-
-# Extra packages (on top of base)
-PROFILE_claude_DNF=()
-PROFILE_claude_TOOLS=()
-
-# Services
-PROFILE_claude_SSH_PORT=2228          # 0 = no SSH server
-PROFILE_claude_SSH_KEY=""             # Path to public key (e.g. ~/.ssh/id_ed25519.pub)
-PROFILE_claude_RUN_PRIVOXY=false      # true = start Privoxy
-
-# Persistent home directories (each gets its own podman volume)
 PROFILE_claude_VOLUMES=(
     .claude       # Claude credentials and settings
     .cache        # npm/pip cache
 )
 
-# Extra podman arguments
-PROFILE_claude_PODMAN_ARGS=(
-    --tmpfs /var/log:rw,size=50m,mode=1777
-    --tmpfs /tmp:rw,size=200m,mode=1777
-)
-
-# ROOT level — runs as root on every startup
-# Location: /etc/sandbox/startup.sh (rootconf volume)
-# Generated on first run, then editable in the volume
+# Claude-specific startup: restore config from backup
 PROFILE_claude_ROOT_STARTUP='
 cfg="${CLAUDE_CONFIG_DIR}/.claude.json"
 backupdir="${CLAUDE_CONFIG_DIR}/backups"
 rootbackup="/etc/sandbox/claude-config-backup.json"
 
-# Restore from backup if config is missing
 if [ ! -f "$cfg" ]; then
     if [ -d "$backupdir" ]; then
         latest=$(ls -t "$backupdir"/.claude.json.backup.* 2>/dev/null | head -1)
@@ -212,15 +244,12 @@ if [ ! -f "$cfg" ]; then
         echo "▶ Config restored from rootconf backup"
     fi
 fi
-
-# Save a copy to rootconf as secondary backup
 if [ -f "$cfg" ]; then
     cp "$cfg" "$rootbackup" 2>/dev/null || true
 fi
 '
 
-# ROOT level — commands in /usr/local/bin/ (format: name|script)
-# Location: /etc/sandbox/wrappers/ (rootconf volume)
+# Claude wrapper — checks config before starting
 PROFILE_claude_ROOT_WRAPPERS=(
     'claude|#!/bin/bash
 CFGDIR="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
@@ -233,100 +262,126 @@ if [ ! -f "$CFG" ] && [ -d "$BACKUPDIR" ]; then
         echo "▶ Config restored from backup"
     fi
 fi
-exec "${HOME}/.claude/bin/claude" "$@"'
+# Check both possible install locations
+if [ -x "${HOME}/.local/bin/claude" ]; then
+    exec "${HOME}/.local/bin/claude" "$@"
+elif [ -x "${HOME}/.claude/bin/claude" ]; then
+    exec "${HOME}/.claude/bin/claude" "$@"
+else
+    echo "✗ Claude not found. Run: curl -fsSL https://claude.ai/install.sh | bash"
+    exit 1
+fi'
 )
 
-# DEV level — user dotfiles (format: name|content)
-# Location: ~/.local/etc/ (pip volume — persists)
-# Generated on first run, then editable in the volume
-PROFILE_claude_DEV_DOTFILES=(
-    'bashrc.local|# Aliases
-alias ll="ls -la"
-alias la="ls -A"
-alias ..="cd .."
-alias ...="cd ../.."
 
-# tmux with custom config
-alias tmux="tmux -f ~/.local/etc/tmux.conf"
-'
-    'tmux.conf|# Minimal status bar
-set -g status-style "bg=default,fg=colour8"
-set -g status-left "#[fg=colour4]#S "
-set -g status-right "#[fg=colour8]%H:%M"
-set -g status-left-length 20
-setw -g window-status-current-style "fg=colour2"
-setw -g window-status-style "fg=colour8"
-'
+
+# ─── Agy (Antigravity only) ───────────────────────────────────────────
+
+PROFILE_agy_DESCRIPTION="Antigravity sandbox — Google AI agent"
+PROFILE_agy_COLOR="33"                  # Yellow prompt
+PROFILE_agy_SSH_PORT=2230
+PROFILE_agy_AGENTS=(
+    'curl -fsSL https://antigravity.google/cli/install.sh | bash'
+)
+PROFILE_agy_VOLUMES=(
+    .gemini       # Antigravity credentials
+    .cache
+    .config       # XDG config
 )
 
 
 # ─── Research (experimentation) ───────────────────────────────────────
 
 PROFILE_research_DESCRIPTION="Research sandbox — untrusted agents"
-
-# Agents
+PROFILE_research_COLOR="31"             # Red prompt — untrusted
+PROFILE_research_USE_KRUN=true          # VM isolation (SSH off → passt → firewall works)
+PROFILE_research_SSH_PORT=0             # No SSH (enables passt for firewall)
+PROFILE_research_RUN_PRIVOXY=true
 PROFILE_research_AGENTS=(
     # Uncomment or add as needed
     # 'pip install --user aider-chat'
-     'curl -fsSL https://antigravity.google/cli/install.sh | bash'
+    # 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
     # 'pip install --user open-interpreter'
 )
-
-# Extra packages
 PROFILE_research_DNF=(
-    chromium
 )
-PROFILE_research_TOOLS=()
-
-# Services
-PROFILE_research_SSH_PORT=2229
-PROFILE_research_SSH_KEY=""
-PROFILE_research_RUN_PRIVOXY=true
-PROFILE_research_PRIVOXY_SOCKS="host.containers.internal:1080"
-
-# Persistent home directories
 PROFILE_research_VOLUMES=(
-    .gemini       # Antigravity credentials
     .cache        # Shared cache
     .config       # XDG config
 )
-
-# Extra podman arguments
 PROFILE_research_PODMAN_ARGS=(
     --shm-size 2g
     --tmpfs /var/log:rw,size=50m,mode=1777
     --tmpfs /tmp:rw,size=200m,mode=1777
 )
 
-# ROOT level (empty — add as needed)
-PROFILE_research_ROOT_STARTUP=''
-PROFILE_research_ROOT_WRAPPERS=()
 
-# DEV level
-PROFILE_research_DEV_DOTFILES=(
-    'bashrc.local|# Aliases
-alias ll="ls -la"
-alias la="ls -A"
-alias ..="cd .."
-alias ...="cd ../.."
+# ─── VNC GUI (graphical applications) ─────────────────────────────────
 
-# tmux with custom config
-alias tmux="tmux -f ~/.local/etc/tmux.conf"
-'
-    'tmux.conf|# Minimal status bar
-set -g status-style "bg=default,fg=colour8"
-set -g status-left "#[fg=colour4]#S "
-set -g status-right "#[fg=colour8]%H:%M"
-set -g status-left-length 20
-setw -g window-status-current-style "fg=colour2"
-setw -g window-status-style "fg=colour8"
-'
+PROFILE_vncgui_DESCRIPTION="GUI sandbox — VNC + XFCE for graphical apps"
+PROFILE_vncgui_COLOR="35"               # Purple prompt
+PROFILE_vncgui_USE_KRUN=false           # Standard container (device access)
+PROFILE_vncgui_SSH_PORT=2231
+PROFILE_vncgui_DNF=(
+    tigervnc-server
+    xfdesktop xfconf xfce4-settings
+    xfce4-session xfce4-panel xfwm4 xfce4-terminal thunar mousepad
+    dejavu-sans-fonts dejavu-serif-fonts
+    dbus-x11 xorg-x11-xinit
+    java-latest-openjdk
+    firefox
 )
+PROFILE_vncgui_VOLUMES=(
+    .cache
+    .config       # XFCE settings persist
+    .vnc          # VNC password and config
+)
+PROFILE_vncgui_PODMAN_ARGS=(
+    --shm-size 2g
+    -p 5901:5901
+    --tmpfs /var/log:rw,size=50m,mode=1777
+    --tmpfs /tmp:rw,size=200m,mode=1777
+)
+PROFILE_vncgui_AGENTS=()
+PROFILE_vncgui_ENV=(
+    "DISPLAY=:1"
+)
+PROFILE_vncgui_ROOT_STARTUP='
+# Set VNC password on first run
+if [ ! -f "/home/${U}/.vnc/passwd" ]; then
+    mkdir -p "/home/${U}/.vnc"
+    echo "${SANDBOX_VNC_PASS:-sandbox}" | vncpasswd -f > "/home/${U}/.vnc/passwd"
+    chmod 600 "/home/${U}/.vnc/passwd"
+    echo "▶ VNC password set (default: sandbox)"
+fi
+
+# Create xstartup for XFCE (without systemd)
+if [ ! -f "/home/${U}/.vnc/xstartup" ]; then
+    {
+        echo "#!/bin/bash"
+        echo "unset SESSION_MANAGER"
+        echo "unset DBUS_SESSION_BUS_ADDRESS"
+        echo "export XDG_SESSION_TYPE=x11"
+        echo "eval \$(dbus-launch --sh-syntax)"
+        echo "xfwm4 &"
+        echo "xfdesktop &"
+        echo "xfce4-panel &"
+        echo "thunar --daemon &"
+        echo "wait"
+    } > "/home/${U}/.vnc/xstartup"
+    chmod +x "/home/${U}/.vnc/xstartup"
+fi
+
+chown -R "${U}:${U}" "/home/${U}/.vnc"
+
+# Start VNC server
+su - "${U}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>/dev/null || true
+echo "▶ VNC server started on :5901"
+'
 
 
 # ─── Profile registry ─────────────────────────────────────────────────
-# Add the name here when creating a new profile
-ALL_PROFILES=(claude research)
+ALL_PROFILES=(claude agy research vncgui)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -341,32 +396,48 @@ warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
 err()   { echo -e "${RED}✗${NC} $*" >&2; }
 
 # Podman global flags (custom storage path)
-podman_global_flags() {
-    local flags=()
-    if [[ -n "$PODMAN_STORAGE" ]]; then
-        flags+=(--root "$PODMAN_STORAGE" --storage-driver overlay)
-    fi
-    echo "${flags[@]}"
-}
+PODMAN_GLOBAL_FLAGS=()
+if [[ -n "$PODMAN_STORAGE" ]]; then
+    PODMAN_GLOBAL_FLAGS=(--root "$PODMAN_STORAGE" --storage-driver overlay)
+fi
 
 # Podman wrapper with global flags
 pcmd() {
-    local flags
-    flags=($(podman_global_flags))
-    podman "${flags[@]}" "$@"
+    podman "${PODMAN_GLOBAL_FLAGS[@]}" "$@"
 }
 
-# Read profile variable via indirect reference
+# Read profile variable: check PROFILE_<name>_<var> first, then DEFAULT_<var>
 get_profile_var() {
     local profile="$1" var="$2"
     local ref="PROFILE_${profile}_${var}"
-    echo "${!ref:-}"
+    if [[ -n "${!ref+x}" ]]; then
+        echo "${!ref}"
+    else
+        local def="DEFAULT_${var}"
+        echo "${!def:-}"
+    fi
+}
+
+# Read profile array: check PROFILE_<name>_<var>[@] first, then DEFAULT_<var>[@]
+# Usage: local arr=($(get_profile_array profile VAR))
+# NOTE: for arrays with spaces in elements, use get_profile_array_ref instead
+get_profile_array_ref() {
+    local profile="$1" var="$2" target="$3"
+    local ref="PROFILE_${profile}_${var}[@]"
+    local def="DEFAULT_${var}[@]"
+    if [[ -n "$(declare -p "PROFILE_${profile}_${var}" 2>/dev/null)" ]]; then
+        eval "${target}=(\"\${${ref}}\")"
+    elif [[ -n "$(declare -p "DEFAULT_${var}" 2>/dev/null)" ]]; then
+        eval "${target}=(\"\${${def}}\")"
+    else
+        eval "${target}=()"
+    fi
 }
 
 # Derive names from profile
 profile_image()      { echo "${1}-sandbox-krun"; }
 profile_home()       { echo "${SANDBOX_BASE}/${1}"; }
-profile_vol_pip()    { echo "${1}-sandbox-pip"; }
+profile_vol_pip()    { echo "${1}-sandbox-local"; }
 profile_vol_root()   { echo "${1}-sandbox-rootconf"; }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -381,7 +452,17 @@ check_prereqs() {
         missing=1
     fi
 
-    if [[ "$USE_KRUN" == "true" ]]; then
+    # Resolve effective krun setting (CLI > profile > default)
+    local effective_krun="$USE_KRUN"
+    if [[ -z "${KRUN_CLI_SET:-}" ]]; then
+        local profile_krun
+        profile_krun=$(get_profile_var "$PROFILE" USE_KRUN)
+        if [[ -n "$profile_krun" ]]; then
+            effective_krun="$profile_krun"
+        fi
+    fi
+
+    if [[ "$effective_krun" == "true" ]]; then
         if crun --version 2>/dev/null | grep -q '+LIBKRUN'; then
             ok "crun + libkrun"
         else
@@ -442,7 +523,7 @@ RUN dnf install -y \\
     && dnf clean all
 
 ${external_runs}
-RUN echo 'dev ALL=(ALL) ALL' > /etc/sudoers.d/dev
+RUN printf 'dev ALL=(ALL) ALL\\nDefaults:dev timestamp_timeout=0\\n' > /etc/sudoers.d/dev
 
 RUN mkdir -p /var/run/sshd && \\
     sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \\
@@ -540,8 +621,8 @@ generate_entrypoint() {
     local startup_content
     startup_content=$(get_profile_var "$profile" ROOT_STARTUP)
 
-    local wrappers_ref="PROFILE_${profile}_ROOT_WRAPPERS[@]"
-    local wrappers=("${!wrappers_ref}")
+    local wrappers=()
+    get_profile_array_ref "$profile" ROOT_WRAPPERS wrappers
 
     local wrapper_init_block=""
     for entry in "${wrappers[@]}"; do
@@ -558,8 +639,25 @@ WRAPEOF
         fi
     done
 
-    local dotfiles_ref="PROFILE_${profile}_DEV_DOTFILES[@]"
-    local dotfiles=("${!dotfiles_ref}")
+    local dotfiles=()
+    get_profile_array_ref "$profile" DEV_DOTFILES dotfiles
+
+    # Add colored prompt based on profile color
+    local pcolor
+    pcolor=$(get_profile_var "$profile" COLOR)
+    if [[ -n "$pcolor" ]] && [[ "$pcolor" != "0" ]]; then
+        # Prepend PS1 to bashrc.local content
+        local ps1_line="PS1=\"\\[\\\\e[${pcolor}m\\][${profile}]\\[\\\\e[0m\\] \\w\\$ \""
+        local new_dotfiles=()
+        for entry in "${dotfiles[@]}"; do
+            if [[ "${entry%%|*}" == "bashrc.local" ]]; then
+                entry="bashrc.local|${ps1_line}
+${entry#*|}"
+            fi
+            new_dotfiles+=("$entry")
+        done
+        dotfiles=("${new_dotfiles[@]}")
+    fi
 
     local dotfiles_init_block=""
     for entry in "${dotfiles[@]}"; do
@@ -586,7 +684,7 @@ H="/home/\${U}"
 ROOTCONF="/etc/sandbox"
 
 export HOME="\${H}"
-export PATH="\${H}/.local/bin:\${H}/.claude/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${H}/.local/bin:\${H}/.claude/bin"
 export TERM="\${TERM:-xterm-256color}"
 export COLORTERM="\${COLORTERM:-truecolor}"
 export CLAUDE_CONFIG_DIR="\${H}/.claude"
@@ -598,20 +696,11 @@ trap cleanup EXIT INT TERM
 
 if [ "\$(id -un)" = "root" ]; then
 
-    # ── 1. Random sudo password ──
-    SUDO_PASS=\$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
-    echo "\${U}:\${SUDO_PASS}" | chpasswd 2>/dev/null
-
-    # Store in non-obvious location (readable by dev for sudo use)
-    echo "\${SUDO_PASS}" > /tmp/.s-token
-    chmod 644 /tmp/.s-token
-
-    echo ""
-    echo "══════════════════════════════════════════"
-    echo "  sudo: \${SUDO_PASS}"
-    echo "  hint: cat /tmp/.s-token"
-    echo "══════════════════════════════════════════"
-    echo ""
+    # ── 1. Set sudo password from host-provided hash ──
+    if [ -n "\${SANDBOX_SUDO_HASH:-}" ]; then
+        usermod -p "\${SANDBOX_SUDO_HASH}" "\${U}"
+        unset SANDBOX_SUDO_HASH
+    fi
 
     # ── 2. Fix volume ownership ──
     for d in "\${H}"/.*/; do
@@ -628,6 +717,7 @@ if [ "\$(id -un)" = "root" ]; then
     # ── 3. Root config defaults (first run) ──
     mkdir -p "\${ROOTCONF}/wrappers"
 
+    # Startup hook
     if [ ! -f "\${ROOTCONF}/startup.sh" ]; then
         cat > "\${ROOTCONF}/startup.sh" << 'STARTUPEOF'
 #!/bin/bash
@@ -639,6 +729,7 @@ STARTUPEOF
         echo "▶ Generated startup.sh"
     fi
 
+    # Command wrappers
 ${wrapper_init_block}
 
     # ── 4. Run startup hook ──
@@ -658,6 +749,7 @@ ${wrapper_init_block}
 
     # ── 5. Dev dotfiles (from .local volume) ──
     mkdir -p "\${H}/.local/etc"
+    chown "\${U}:\${U}" "\${H}/.local/etc"
 ${dotfiles_init_block}
 
     # ── 6. SSH server ──
@@ -681,6 +773,10 @@ ${dotfiles_init_block}
             chown -R "\${U}:\${U}" "\${H}/.ssh"
             echo "▶ SSH key auth configured"
         fi
+
+        # Enable TCP forwarding (required for VS Code Remote SSH)
+        mkdir -p /etc/ssh/sshd_config.d
+        echo "AllowTcpForwarding yes" > /etc/ssh/sshd_config.d/99-sandbox.conf
 
         /usr/sbin/sshd -e
         echo "▶ SSH server started"
@@ -725,15 +821,35 @@ PXYEOF
             nft add table inet filter 2>/dev/null || true
             nft flush table inet filter 2>/dev/null || true
             nft add chain inet filter output '{ type filter hook output priority 0; policy drop; }'
+            nft add rule inet filter output ct state established,related accept
             nft add rule inet filter output oif lo accept
 
             IFS=',' read -ra _DESTS <<< "\${SANDBOX_ALLOW:-}"
             for _hostport in "\${_DESTS[@]}"; do
                 if [ -z "\$_hostport" ]; then continue; fi
-                _host="\${_hostport%:*}"
-                _port="\${_hostport#*:}"
-                nft add rule inet filter output ip daddr "\$_host" tcp dport "\$_port" accept
-                echo "▶ Firewall: allowed → \$_host:\$_port"
+
+                # Parse host:port, :port, or bare port
+                if [[ "\$_hostport" == *:* ]]; then
+                    _host="\${_hostport%:*}"
+                    _port="\${_hostport#*:}"
+                else
+                    _host=""
+                    _port="\$_hostport"
+                fi
+
+                if [ -z "\$_host" ]; then
+                    # :port only — allow to any destination
+                    nft add rule inet filter output tcp dport "\$_port" accept || {
+                        echo "⚠ Firewall: failed to add rule for port \$_port"
+                    }
+                    echo "▶ Firewall: allowed → *:\$_port"
+                else
+                    # host:port — allow to specific destination
+                    nft add rule inet filter output ip daddr "\$_host" tcp dport "\$_port" accept || {
+                        echo "⚠ Firewall: failed to add rule for \$_host:\$_port"
+                    }
+                    echo "▶ Firewall: allowed → \$_host:\$_port"
+                fi
             done
 
             if [ "\${SANDBOX_PRIVOXY:-}" = "true" ]; then
@@ -746,6 +862,25 @@ PXYEOF
                 fi
             fi
 
+            # Allow DNS if --allow-dns was specified
+            if [ -n "\${SANDBOX_ALLOW_DNS:-}" ]; then
+                if [ "\${SANDBOX_ALLOW_DNS}" = "auto" ]; then
+                    _resolvers=\$(awk '/^nameserver/ {print \$2}' /etc/resolv.conf)
+                else
+                    _resolvers="\${SANDBOX_ALLOW_DNS%:*}"
+                fi
+                _dnsport="53"
+                case "\${SANDBOX_ALLOW_DNS}" in *:*) _dnsport="\${SANDBOX_ALLOW_DNS#*:}" ;; esac
+
+                for _r in \$_resolvers; do
+                    case "\$_r" in *:*) continue ;; esac
+                    nft add rule inet filter output ip daddr "\$_r" udp dport "\$_dnsport" accept || true
+                    nft add rule inet filter output ip daddr "\$_r" tcp dport "\$_dnsport" accept || true
+                    echo "▶ Firewall: DNS allowed → \$_r:\$_dnsport"
+                done
+                [ -z "\$_resolvers" ] && echo "⚠ --allow-dns: no resolver found in /etc/resolv.conf"
+            fi
+
             echo "▶ Firewall: everything else blocked"
         else
             echo "⚠ nftables not available — firewall not configured"
@@ -755,12 +890,24 @@ PXYEOF
             nft add table inet filter 2>/dev/null || true
             nft flush table inet filter 2>/dev/null || true
             nft add chain inet filter output '{ type filter hook output priority 0; policy drop; }'
+            nft add rule inet filter output ct state established,related accept
             nft add rule inet filter output oif lo accept
             echo "▶ Firewall: locked — loopback only"
         else
             echo "⚠ nftables not available — firewall not configured"
         fi
     fi
+
+    # Build extra env passthrough for custom variables
+    EXTRA_ENV_ARGS=""
+    if [ -n "\${SANDBOX_EXTRA_ENV:-}" ]; then
+        IFS=',' read -ra _EVARS <<< "\${SANDBOX_EXTRA_ENV}"
+        for _evar in "\${_EVARS[@]}"; do
+            EXTRA_ENV_ARGS="\${EXTRA_ENV_ARGS} \${_evar}=\$(printenv \${_evar} 2>/dev/null)"
+        done
+    fi
+
+    SANDBOX_ARGS="\$*"
 
     exec runuser -u "\${U}" -- env \\
         HOME="\${HOME}" \\
@@ -775,6 +922,7 @@ PXYEOF
         http_proxy="\${http_proxy:-}" \\
         https_proxy="\${https_proxy:-}" \\
         NO_PROXY="\${NO_PROXY:-}" \\
+        \${EXTRA_ENV_ARGS} \\
         "\$@"
 else
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
@@ -894,9 +1042,9 @@ do_run() {
     local container_name="${profile}-${mount_name}"
     local mount_point="/app/${mount_name}"
 
-    # Extra volumes from profile config
-    local ref="PROFILE_${profile}_VOLUMES[@]"
-    local extra_vols=("${!ref}")
+    # Extra volumes from profile config (falls back to DEFAULT_VOLUMES)
+    local extra_vols=()
+    get_profile_array_ref "$profile" VOLUMES extra_vols
     local vol_flags=()
     for vdir in "${extra_vols[@]}"; do
         if [[ -n "$vdir" ]]; then
@@ -905,22 +1053,61 @@ do_run() {
         fi
     done
 
+    # Resolve per-profile defaults (CLI overrides > profile > global default)
+    local use_krun="$USE_KRUN"
+    local profile_krun
+    profile_krun=$(get_profile_var "$profile" USE_KRUN)
+    if [[ -n "$profile_krun" ]] && [[ "$USE_KRUN" == "true" ]] && [[ -z "${KRUN_CLI_SET:-}" ]]; then
+        use_krun="$profile_krun"
+    fi
+
+    local profile_net
+    profile_net=$(get_profile_var "$profile" NET_MODE)
+    local effective_net="${NET_MODE:-${profile_net:-open}}"
+
+    local profile_ram
+    profile_ram=$(get_profile_var "$profile" RAM)
+    local effective_ram="${RAM_OVERRIDE:-${profile_ram:-${DEFAULT_RAM}}}"
+    local profile_cpus
+    profile_cpus=$(get_profile_var "$profile" CPUS)
+    local effective_cpus="${CPUS_OVERRIDE:-${profile_cpus:-${DEFAULT_CPUS}}}"
+
     # Runtime mode and resource limits
     local krun_flags=()
     local runtime_label
-    local effective_ram="${RAM_OVERRIDE:-${RAM_MIB}}"
-    local effective_cpus="${CPUS_OVERRIDE:-${CPUS}}"
 
-    if [[ "$USE_KRUN" == "true" ]]; then
+    if [[ "$use_krun" == "true" ]]; then
         krun_flags+=(--annotation "run.oci.handler=krun")
         krun_flags+=(--annotation "krun.ram_mib=${effective_ram}")
         krun_flags+=(--annotation "krun.cpus=${effective_cpus}")
-        krun_flags+=(--annotation "krun.use_passt=1")
         runtime_label="krun microVM"
     else
         krun_flags+=(--memory "${effective_ram}m")
         krun_flags+=(--cpus "${effective_cpus}")
         runtime_label="container"
+    fi
+
+    # Determine network mode early (needed for passt decision)
+
+    # Enable passt networking for krun when appropriate
+    # passt: proper network stack (nftables works) but SSH port mapping broken
+    # TSI: socket proxying (SSH port mapping works) but bypasses nftables
+    if [[ "$use_krun" == "true" ]] && [[ "$TSI_OVERRIDE" != "true" ]]; then
+        if [[ "$ssh_port" == "0" ]] || [[ -z "$ssh_port" ]]; then
+            # No SSH — always use passt (better networking)
+            krun_flags+=(--annotation "krun.use_passt=1")
+            runtime_label="krun microVM (passt)"
+        elif [[ "$effective_net" == "filtered" ]] || [[ "$effective_net" == "locked" ]]; then
+            # SSH + firewall — passt for firewall, SSH port mapping won't work
+            krun_flags+=(--annotation "krun.use_passt=1")
+            runtime_label="krun microVM (passt)"
+            warn "Firewall requires passt — SSH port mapping disabled"
+            warn "Use --no-krun for both SSH and firewall, or connect via VS Code tunnel"
+        else
+            runtime_label="krun microVM (TSI)"
+        fi
+    elif [[ "$use_krun" == "true" ]] && [[ "$TSI_OVERRIDE" == "true" ]]; then
+        runtime_label="krun microVM (TSI, forced)"
     fi
 
     # Network and environment flags
@@ -930,11 +1117,69 @@ do_run() {
     env_flags+=(-e "TERM=xterm-256color")
     env_flags+=(-e "COLORTERM=truecolor")
 
+    # Generate sudo password on host, send only hash to container
+    local sudo_pass
+    sudo_pass=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+    local sudo_hash
+    sudo_hash=$(openssl passwd -6 "$sudo_pass")
+    env_flags+=(-e "SANDBOX_SUDO_HASH=${sudo_hash}")
+
+    # Extra env vars from profile and CLI
+    local profile_env=()
+    get_profile_array_ref "$profile" ENV profile_env
+    local profile_env_pass=()
+    get_profile_array_ref "$profile" ENV_PASS profile_env_pass
+    local extra_env_names=()
+
+    # Profile ENV: set values
+    for evar in "${profile_env[@]}"; do
+        if [[ -n "$evar" ]]; then
+            env_flags+=(-e "$evar")
+            extra_env_names+=("${evar%%=*}")
+        fi
+    done
+
+    # Profile ENV_PASS: pass through from host (no values in script)
+    for evar in "${profile_env_pass[@]}"; do
+        if [[ -n "$evar" ]] && [[ -n "${!evar:-}" ]]; then
+            env_flags+=(-e "${evar}=${!evar}")
+            extra_env_names+=("$evar")
+        elif [[ -n "$evar" ]]; then
+            warn "ENV_PASS: ${evar} not set on host — skipping"
+        fi
+    done
+
+    # CLI --env: auto-detect set (KEY=VALUE) vs passthrough (KEY)
+    for evar in "${ENV_OVERRIDES[@]}"; do
+        if [[ -n "$evar" ]]; then
+            if [[ "$evar" == *=* ]]; then
+                # KEY=VALUE → set
+                env_flags+=(-e "$evar")
+                extra_env_names+=("${evar%%=*}")
+            else
+                # KEY only → pass through from host
+                if [[ -n "${!evar:-}" ]]; then
+                    env_flags+=(-e "${evar}=${!evar}")
+                    extra_env_names+=("$evar")
+                else
+                    warn "--env ${evar} not set on host — skipping"
+                fi
+            fi
+        fi
+    done
+
+    # Tell entrypoint which extra vars to pass through to dev user
+    if [[ ${#extra_env_names[@]} -gt 0 ]]; then
+        local env_names_joined
+        env_names_joined=$(IFS=','; echo "${extra_env_names[*]}")
+        env_flags+=(-e "SANDBOX_EXTRA_ENV=${env_names_joined}")
+    fi
+
     # SSH server
     local ssh_flags=()
     local ssh_label="off"
     if [[ "$ssh_port" != "0" ]] && [[ -n "$ssh_port" ]]; then
-        ssh_flags+=(-p "${ssh_port}:22")
+        ssh_flags+=(-p "127.0.0.1:${ssh_port}:22")
         env_flags+=(-e "SANDBOX_SSHD=true")
         ssh_label="port ${ssh_port}"
 
@@ -979,8 +1224,7 @@ do_run() {
         privoxy_label=":8118 → SOCKS5 ${forward_socks}"
     fi
 
-    # Network mode
-    local effective_net="${NET_MODE:-open}"
+    # Network mode (effective_net already set above for passt decision)
     local cap_flags=()
     if [[ "$effective_net" == "filtered" ]]; then
         local allow_joined
@@ -989,6 +1233,16 @@ do_run() {
         env_flags+=(-e "SANDBOX_ALLOW=${allow_joined}")
         cap_flags+=(--cap-add NET_ADMIN)
         net_label="filtered (${allow_joined})"
+
+        # DNS override
+        if [[ -n "$DNS_OVERRIDE" ]]; then
+            env_flags+=(-e "SANDBOX_ALLOW_DNS=${DNS_OVERRIDE}")
+            net_label="${net_label}, dns"
+            # Warn if Privoxy+DNS both enabled (DNS hole around SOCKS chain)
+            if [[ "$privoxy_enabled" == "true" ]]; then
+                warn "Both Privoxy and --allow-dns enabled — DNS queries bypass SOCKS proxy"
+            fi
+        fi
     elif [[ "$effective_net" == "locked" ]]; then
         env_flags+=(-e "SANDBOX_FIREWALL=locked")
         cap_flags+=(--cap-add NET_ADMIN)
@@ -998,7 +1252,11 @@ do_run() {
     info "Starting ${runtime_label} ..."
     info "  Profile:  ${profile} — ${desc}"
     info "  Project:  ${project_dir} → ${mount_point}"
-    info "  RAM/CPU:  ${effective_ram} MiB / ${effective_cpus} cores"
+    if [[ "$use_krun" == "true" ]]; then
+        info "  RAM/CPU:  ${effective_ram} MiB / ${effective_cpus} cores"
+    else
+        info "  RAM/CPU:  ${effective_ram} MiB / ${effective_cpus} cores (limits)"
+    fi
     info "  Image:    ${image_name}"
     info "  Network:  ${net_label}"
     info "  SSH:      ${ssh_label}"
@@ -1009,14 +1267,25 @@ do_run() {
     echo ""
     echo -e "  ${GREEN}Persisted on exit:${NC}"
     echo -e "    ✓ Project files in ${project_dir}"
-    echo -e "    ✓ pip packages (${vol_pip})"
     echo -e "    ✓ Root config — SSH keys, rules (${vol_root})"
+    echo -e "    ✓ pip, dotfiles, history (${vol_pip})"
+    # Collect extra volume names for compact display
+    local vol_names=""
     for vdir in "${extra_vols[@]}"; do
         if [[ -n "$vdir" ]]; then
-            echo -e "    ✓ ~/${vdir} (${profile}-sandbox-${vdir#.})"
+            if [[ -n "$vol_names" ]]; then
+                vol_names="${vol_names}, ${vdir}"
+            else
+                vol_names="${vdir}"
+            fi
         fi
     done
+    if [[ -n "$vol_names" ]]; then
+        echo -e "    ✓ ${vol_names}"
+    fi
     echo -e "    ✗ dnf packages → edit profile and rebuild"
+    echo ""
+    echo -e "  ${GREEN}sudo:${NC} ${sudo_pass}"
     echo ""
 
     # Check if session is already active on this directory
@@ -1043,8 +1312,8 @@ do_run() {
         fi
     fi
 
-    local extra_args_ref="PROFILE_${profile}_PODMAN_ARGS[@]"
-    local profile_args=("${!extra_args_ref}")
+    local profile_args=()
+    get_profile_array_ref "$profile" PODMAN_ARGS profile_args
 
     pcmd run --rm -it \
         --name "${container_name}" \
@@ -1063,7 +1332,8 @@ do_run() {
         -w "${mount_point}" \
         "${env_flags[@]}" \
         "${image_name}" \
-        "$@"
+        "$@" \
+    || true
 
     echo ""
     ok "Shell closed. Changes in ${project_dir} saved."
@@ -1110,6 +1380,13 @@ do_list() {
 do_clean() {
     local profile="$1"
     local purge="${2:-}"
+
+    # Validate argument
+    if [[ -n "$purge" ]] && [[ "$purge" != "--purge" ]]; then
+        err "Unknown option for clean: $purge"
+        err "Usage: dev-sandbox clean [--purge]"
+        exit 1
+    fi
     local image_name
     image_name=$(profile_image "$profile")
     local phome
@@ -1197,6 +1474,111 @@ do_profiles() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════
+#  INTERNAL — Info (show profile settings)
+# ═══════════════════════════════════════════════════════════════════════
+
+do_info() {
+    local profile="$1"
+    echo ""
+    info "=== Profile: ${profile} ==="
+    echo ""
+
+    local vars=(DESCRIPTION USE_KRUN NET_MODE SSH_PORT SSH_KEY
+                RUN_PRIVOXY PRIVOXY_SOCKS RAM CPUS COLOR
+                DROP_NET_ADMIN)
+
+    for var in "${vars[@]}"; do
+        local val
+        val=$(get_profile_var "$profile" "$var")
+        local source="default"
+        local ref="PROFILE_${profile}_${var}"
+        if [[ -n "${!ref+x}" ]]; then
+            source="profile"
+        fi
+        printf "  %-20s = %-40s [%s]\n" "$var" "${val:-(empty)}" "$source"
+    done
+
+    echo ""
+    echo "  Arrays:"
+    local arr_names=(AGENTS DNF TOOLS VOLUMES PODMAN_ARGS ENV ENV_PASS
+                     ROOT_WRAPPERS DEV_DOTFILES)
+    for var in "${arr_names[@]}"; do
+        local arr=()
+        get_profile_array_ref "$profile" "$var" arr
+        local count=${#arr[@]}
+        local source="default"
+        if [[ -n "$(declare -p "PROFILE_${profile}_${var}" 2>/dev/null)" ]]; then
+            source="profile"
+        fi
+        printf "  %-20s = %-40s [%s]\n" "$var" "${count} items" "$source"
+    done
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+#  INTERNAL — Info (show resolved profile settings)
+# ═══════════════════════════════════════════════════════════════════════
+
+do_info() {
+    local profile="$1"
+    local desc
+    desc=$(get_profile_var "$profile" DESCRIPTION)
+
+    echo ""
+    info "Profile: ${profile}"
+    echo "  ${desc}"
+    echo ""
+
+    echo "Runtime:"
+    echo "  USE_KRUN         $(get_profile_var "$profile" USE_KRUN)"
+    echo "  RAM              $(get_profile_var "$profile" RAM) MiB"
+    echo "  CPUS             $(get_profile_var "$profile" CPUS)"
+    echo ""
+
+    echo "Network:"
+    echo "  NET_MODE         $(get_profile_var "$profile" NET_MODE)"
+    echo "  RUN_PRIVOXY      $(get_profile_var "$profile" RUN_PRIVOXY)"
+    echo "  PRIVOXY_SOCKS    $(get_profile_var "$profile" PRIVOXY_SOCKS)"
+    echo ""
+
+    echo "Services:"
+    echo "  SSH_PORT          $(get_profile_var "$profile" SSH_PORT)"
+    echo "  SSH_KEY           $(get_profile_var "$profile" SSH_KEY)"
+    echo "  COLOR             $(get_profile_var "$profile" COLOR)"
+    echo ""
+
+    echo "Volumes:"
+    local vols=()
+    get_profile_array_ref "$profile" VOLUMES vols
+    for v in "${vols[@]}"; do
+        [[ -n "$v" ]] && echo "  ${v} → ${profile}-sandbox-${v#.}"
+    done
+    echo ""
+
+    echo "Agents:"
+    local agents=()
+    get_profile_array_ref "$profile" AGENTS agents
+    if [[ ${#agents[@]} -eq 0 ]] || [[ -z "${agents[0]:-}" ]]; then
+        echo "  (none)"
+    else
+        for a in "${agents[@]}"; do
+            [[ -n "$a" ]] && echo "  ${a}"
+        done
+    fi
+    echo ""
+
+    echo "Extra DNF:"
+    local dnf=()
+    get_profile_array_ref "$profile" DNF dnf
+    if [[ ${#dnf[@]} -eq 0 ]] || [[ -z "${dnf[0]:-}" ]]; then
+        echo "  (none)"
+    else
+        echo "  ${dnf[*]}"
+    fi
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Status
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1222,8 +1604,8 @@ do_status() {
     echo "  Sandbox base:  ${SANDBOX_BASE}"
     echo "  Profile home:  ${phome}"
     echo "  Base OS:       ${BASE_OS}"
-    echo "  RAM:           ${RAM_MIB} MiB"
-    echo "  CPU:           ${CPUS}"
+    echo "  RAM:           ${DEFAULT_RAM} MiB"
+    echo "  CPU:           ${DEFAULT_CPUS}"
     echo "  Vol pip:       ${vol_pip}"
     echo "  Vol rootconf:  ${vol_root}"
 
@@ -1300,18 +1682,27 @@ ${GREEN}Network:${NC}
   --net locked                          Locked — no outbound traffic
   --allow host:port                     Allow only this destination (repeatable)
                                         Automatically locks everything else
+  --allow-dns                           Allow DNS to resolvers in /etc/resolv.conf
+  --allow-dns host[:port]               Allow DNS only to this resolver
 
-${GREEN}Services:${NC}
+${GREEN}Runtime:${NC}
   --no-krun                             Standard container (no microVM)
   --krun                                Force microVM (override profile)
-  --ram MiB                             Memory limit (default: ${RAM_MIB})
-  --cpus N                              CPU cores limit (default: ${CPUS})
+  --tsi                                 Force TSI networking (skip passt)
+  --ram MiB                             Memory limit (default: ${DEFAULT_RAM})
+  --cpus N                              CPU cores limit (default: ${DEFAULT_CPUS})
   --force                               Kill active session and restart
+
+${GREEN}Services:${NC}
   --ssh-port PORT                       SSH server port (0 = disabled)
-  --ssh-key ~/.ssh/id_ed25519.pub      SSH public key for passwordless auth
+  --ssh-key ~/.ssh/id_ed25519.pub       SSH public key for passwordless auth
   --run-privoxy                         Enable Privoxy HTTP proxy
   --no-privoxy                          Disable Privoxy (override profile)
   --privoxy-socks host:port             Where Privoxy forwards traffic
+  --proxy PORT                          Shortcut: --allow + --run-privoxy + --privoxy-socks
+                                        Routes all traffic through SOCKS proxy on host
+  --env KEY=VALUE                       Pass env variable to container (repeatable)
+  --env KEY                             Pass through from host env (no value in CLI)
 
 ${GREEN}Examples:${NC}
   dev-sandbox                           Claude, full internet
@@ -1337,8 +1728,8 @@ EOF
 ${GREEN}Configuration:${NC}
   Sandbox base:     ${SANDBOX_BASE}
   Base OS:          ${BASE_OS}
-  RAM:              ${RAM_MIB} MiB  (DEV_SANDBOX_RAM)
-  CPU:              ${CPUS}        (DEV_SANDBOX_CPUS)
+  RAM:              ${DEFAULT_RAM} MiB  (DEV_SANDBOX_RAM)
+  CPU:              ${DEFAULT_CPUS}        (DEV_SANDBOX_CPUS)
   Storage:          ${PODMAN_STORAGE:-default podman storage}  (DEV_SANDBOX_STORAGE)
   Base packages:    ${#BASE_DNF_PACKAGES[@]}
 
@@ -1368,68 +1759,84 @@ EOF
 
 PROFILE="${DEFAULT_PROFILE}"
 USE_KRUN=true
-NET_MODE=""                # open, locked, filtered (empty = profile default → open)
-ALLOW_DESTINATIONS=()      # --allow host:port (repeatable)
-PRIVOXY_SOCKS_OVERRIDE=""  # --privoxy-socks host:port
+KRUN_CLI_SET=""             # Set to "true" when --krun/--no-krun is used
+TSI_OVERRIDE=false          # --tsi (force TSI networking, skip passt)
+NET_MODE=""                 # open, locked, filtered (empty = profile default → open)
+ALLOW_DESTINATIONS=()       # --allow host:port (repeatable)
+PRIVOXY_SOCKS_OVERRIDE=""   # --privoxy-socks host:port
 SSH_PORT_OVERRIDE=""        # --ssh-port PORT
 SSH_KEY_OVERRIDE=""         # --ssh-key /path/to/key.pub
 PRIVOXY_OVERRIDE=""         # --run-privoxy / --no-privoxy
 RAM_OVERRIDE=""             # --ram MiB
 CPUS_OVERRIDE=""            # --cpus N
 FORCE_RUN=false             # --force
+DNS_OVERRIDE=""             # --allow-dns [resolver]
+PROXY_SHORTCUT=""           # --proxy PORT (shortcut for --allow + --run-privoxy + --privoxy-socks)
+ENV_OVERRIDES=()            # --env KEY=VALUE (repeatable)
+
+# Helper: extract value from --opt=value or --opt value
+parse_opt_value() {
+    local opt="$1"
+    if [[ "$opt" == *=* ]]; then
+        echo "${opt#*=}"
+        return 0
+    fi
+    return 1
+}
 
 while [[ "${1:-}" == -* ]]; do
     case "${1:-}" in
         --no-krun)
             USE_KRUN=false
+            KRUN_CLI_SET=true
             shift
             ;;
         --krun)
             USE_KRUN=true
+            KRUN_CLI_SET=true
             shift
             ;;
-        --net)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing mode. Usage: --net open|locked"
-                exit 1
-            fi
-            case "$2" in
-                open|locked) NET_MODE="$2" ;;
-                *) err "Unknown mode: $2 (use: open, locked)"; exit 1 ;;
+        --tsi)
+            TSI_OVERRIDE=true
+            shift
+            ;;
+        --net|--net=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing mode. Usage: --net open|locked"; exit 1; fi
+            case "$val" in
+                open|locked) NET_MODE="$val" ;;
+                *) err "Unknown mode: $val (use: open, locked)"; exit 1 ;;
             esac
-            shift 2
             ;;
-        --allow)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing address. Usage: --allow host:port"
-                exit 1
-            fi
-            ALLOW_DESTINATIONS+=("$2")
-            shift 2
+        --allow|--allow=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing address. Usage: --allow host:port"; exit 1; fi
+            ALLOW_DESTINATIONS+=("$val")
             ;;
-        --privoxy-socks)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing address. Usage: --privoxy-socks host:port"
-                exit 1
-            fi
-            PRIVOXY_SOCKS_OVERRIDE="$2"
-            shift 2
+        --privoxy-socks|--privoxy-socks=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing address. Usage: --privoxy-socks host:port"; exit 1; fi
+            PRIVOXY_SOCKS_OVERRIDE="$val"
             ;;
-        --ssh-port)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing port. Usage: --ssh-port PORT"
-                exit 1
-            fi
-            SSH_PORT_OVERRIDE="$2"
-            shift 2
+        --ssh-port|--ssh-port=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing port. Usage: --ssh-port PORT"; exit 1; fi
+            SSH_PORT_OVERRIDE="$val"
             ;;
-        --ssh-key)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing path. Usage: --ssh-key ~/.ssh/id_ed25519.pub"
-                exit 1
-            fi
-            SSH_KEY_OVERRIDE="$2"
-            shift 2
+        --ssh-key|--ssh-key=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing path. Usage: --ssh-key ~/.ssh/id_ed25519.pub"; exit 1; fi
+            SSH_KEY_OVERRIDE="$val"
             ;;
         --run-privoxy)
             PRIVOXY_OVERRIDE="true"
@@ -1439,34 +1846,54 @@ while [[ "${1:-}" == -* ]]; do
             PRIVOXY_OVERRIDE="false"
             shift
             ;;
-        --ram)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing value. Usage: --ram 8192"
-                exit 1
-            fi
-            RAM_OVERRIDE="$2"
-            shift 2
+        --ram|--ram=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing value. Usage: --ram 8192"; exit 1; fi
+            RAM_OVERRIDE="$val"
             ;;
-        --cpus)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing value. Usage: --cpus 8"
-                exit 1
-            fi
-            CPUS_OVERRIDE="$2"
-            shift 2
+        --cpus|--cpus=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing value. Usage: --cpus 8"; exit 1; fi
+            CPUS_OVERRIDE="$val"
             ;;
         --force)
             FORCE_RUN=true
             shift
             ;;
-        -p)
-            if [[ -z "${2:-}" ]]; then
-                err "Missing profile name. Usage: dev-sandbox -p <profile>"
-                err "Available: ${ALL_PROFILES[*]}"
-                exit 1
+        --allow-dns|--allow-dns=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then
+                DNS_OVERRIDE="$val"; shift
+            elif [[ -n "${2:-}" ]] && [[ "$2" != -* ]]; then
+                DNS_OVERRIDE="$2"; shift 2
+            else
+                DNS_OVERRIDE="auto"; shift
             fi
-            PROFILE="$2"
-            shift 2
+            ;;
+        --proxy|--proxy=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing port. Usage: --proxy 1080"; exit 1; fi
+            PROXY_SHORTCUT="$val"
+            ;;
+        --env|--env=*|-e|-e=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing value. Usage: --env KEY=VALUE"; exit 1; fi
+            ENV_OVERRIDES+=("$val")
+            ;;
+        -p|-p=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing profile name. Usage: dev-sandbox -p <profile>"; err "Available: ${ALL_PROFILES[*]}"; exit 1; fi
+            PROFILE="$val"
 
             local_valid=false
             for p in "${ALL_PROFILES[@]}"; do
@@ -1481,11 +1908,32 @@ while [[ "${1:-}" == -* ]]; do
                 exit 1
             fi
             ;;
-        *)
+        --)
+            shift
             break
+            ;;
+        -h|-help|--help)
+            usage
+            exit 0
+            ;;
+        --version)
+            echo "dev-sandbox v${VERSION}"
+            exit 0
+            ;;
+        -*)
+            err "Unknown option: $1"
+            err "Run 'dev-sandbox help' for usage"
+            exit 1
             ;;
     esac
 done
+
+# Expand --proxy shortcut (before auto-filter)
+if [[ -n "$PROXY_SHORTCUT" ]]; then
+    ALLOW_DESTINATIONS+=("host.containers.internal:${PROXY_SHORTCUT}")
+    PRIVOXY_OVERRIDE="true"
+    PRIVOXY_SOCKS_OVERRIDE="host.containers.internal:${PROXY_SHORTCUT}"
+fi
 
 # --allow implicitly sets filtered mode
 if [[ ${#ALLOW_DESTINATIONS[@]} -gt 0 ]] && [[ -z "$NET_MODE" ]]; then
@@ -1498,6 +1946,16 @@ if [[ "$NET_MODE" == "locked" ]] && [[ ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
     err "Use --net locked (no exceptions) or --allow (with exceptions)"
     exit 1
 fi
+if [[ "$NET_MODE" == "locked" ]] && [[ -n "$DNS_OVERRIDE" ]]; then
+    err "--net locked and --allow-dns are mutually exclusive"
+    exit 1
+fi
+if [[ "$NET_MODE" == "locked" ]] && [[ "$PRIVOXY_OVERRIDE" == "true" ]]; then
+    err "--net locked and --run-privoxy are mutually exclusive"
+    err "--net locked blocks all traffic, including Privoxy"
+    err "Use --proxy PORT to route traffic through proxy with firewall"
+    exit 1
+fi
 
 case "${1:-}" in
     build)
@@ -1507,8 +1965,25 @@ case "${1:-}" in
         ;;
     clean)      shift; do_clean "$PROFILE" "${1:-}" ;;
     status)     do_status "$PROFILE" ;;
+    info)       do_info "$PROFILE" ;;
     ls|list)    do_list ;;
     profiles)   do_profiles ;;
     help|--help|-h) usage ;;
-    *)          check_prereqs; do_run "$PROFILE" "$@" ;;
+    version)  echo "dev-sandbox v${VERSION}" ;;
+    *)
+        # Check if argument is a profile name (common mistake: forgetting -p)
+        if [[ -n "${1:-}" ]]; then
+            for p in "${ALL_PROFILES[@]}"; do
+                if [[ "$p" == "$1" ]]; then
+                    err "Did you mean: dev-sandbox -p $1"
+                    exit 1
+                fi
+            done
+            # Unknown command — not a profile, not a known subcommand
+            err "Unknown command: $1"
+            err "Run 'dev-sandbox help' for usage"
+            exit 1
+        fi
+        check_prereqs; do_run "$PROFILE" "$@"
+        ;;
 esac
