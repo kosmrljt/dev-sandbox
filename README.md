@@ -6,8 +6,6 @@ For Linux distributions with Podman support. Developed and tested on Fedora 44.
 
 One self-contained bash script. No dependencies beyond Podman. Configure profiles, build, run — everything in a single file.
 
-![demo](docs/demo.gif)
-
 ## Why
 
 AI coding agents need shell access and run arbitrary code. Without isolation:
@@ -40,6 +38,8 @@ dev-sandbox
 ```
 
 The first run builds images (~1.6 GB, several minutes). Subsequent runs start in seconds. The default profile is configured for Claude Code — edit the script to change.
+
+![demo](docs/demo.gif)
 
 ## Profiles
 
