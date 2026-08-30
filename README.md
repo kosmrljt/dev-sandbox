@@ -6,6 +6,8 @@ For Linux distributions with Podman support. Developed and tested on Fedora 44.
 
 One self-contained bash script. No dependencies beyond Podman. Configure profiles, build, run — everything in a single file.
 
+![demo](docs/demo.gif)
+
 ## Why
 
 AI coding agents need shell access and run arbitrary code. Without isolation:
