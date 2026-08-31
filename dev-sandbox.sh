@@ -211,7 +211,7 @@ setw -g window-status-style "fg=colour8"
 
 # ─── Claude (default) ─────────────────────────────────────────────────
 
-PROFILE_claude_DESCRIPTION="Claude Code — production agent"
+PROFILE_claude_DESCRIPTION="Claude Code"
 PROFILE_claude_COLOR="32"               # Green prompt — trusted agent
 #PROFILE_claude_SSH_PORT=2228
 PROFILE_claude_AGENTS=(
