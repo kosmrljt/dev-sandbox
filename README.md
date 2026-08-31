@@ -46,7 +46,7 @@ Four built-in profiles with color-coded prompts. Each is isolated — separate v
 
 | Profile | Agent | Color | Description |
 |---|---|---|---|
-| `claude` (default) | Claude Code | Green | Production agent |
+| `claude` (default) | Claude Code | Green |  |
 | `research` | None (template) | Red | Add your own untrusted agents |
 | `agy` | Antigravity | Yellow | Google AI agent |
 | `vncgui` | GUI apps | Purple | VNC + XFCE desktop |
