@@ -68,6 +68,12 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
+# Do not run as root — rootless podman requires a regular user
+if [[ $(id -u) -eq 0 ]]; then
+    echo "✗ Do not run dev-sandbox as root. Use a regular user." >&2
+    exit 1
+fi
+
 # ═══════════════════════════════════════════════════════════════════════
 #  COMMON CONFIGURATION
 #
@@ -211,7 +217,7 @@ setw -g window-status-style "fg=colour8"
 
 # ─── Claude (default) ─────────────────────────────────────────────────
 
-PROFILE_claude_DESCRIPTION="Claude Code"
+PROFILE_claude_DESCRIPTION="Claude Code — production agent"
 PROFILE_claude_COLOR="32"               # Green prompt — trusted agent
 #PROFILE_claude_SSH_PORT=2228
 PROFILE_claude_AGENTS=(
@@ -385,6 +391,7 @@ ALL_PROFILES=(claude agy research vncgui)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Helper functions
+#  Color output, profile variable resolution, podman wrapper
 # ═══════════════════════════════════════════════════════════════════════
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'
@@ -487,6 +494,7 @@ check_prereqs() {
 
 # ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Scaffold (generate build files from config)
+#  Creates Dockerfile and entrypoint.sh in ~/.dev-sandbox/<profile>/
 # ═══════════════════════════════════════════════════════════════════════
 
 scaffold_base() {
@@ -503,7 +511,7 @@ scaffold_base() {
         local clean
         clean=$(echo "$tool" | sed 's/#.*//g' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
         if [ -n "$clean" ]; then
-            external_runs="${external_runs}RUN ${clean}
+            external_runs="${external_runs}RUN echo \"▶ Installing external tool ...\" && ${clean}
 "
         fi
     done
@@ -514,15 +522,19 @@ FROM ${BASE_OS}
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 
-RUN groupadd -g \${HOST_GID} dev 2>/dev/null || true && \\
+RUN echo "▶ Creating dev user ..." && \\
+    groupadd -g \${HOST_GID} dev 2>/dev/null || true && \\
     useradd -u \${HOST_UID} -g \${HOST_GID} -m -s /bin/bash dev 2>/dev/null || true
 
-RUN dnf install -y \\
+RUN echo "▶ Installing system packages (this may take a few minutes) ..." && \\
+    dnf install -y \\
         ${packages_joined} \\
-    && dnf clean all
+    && dnf clean all && \\
+    echo "✓ System packages installed"
 
 ${external_runs}
-RUN printf 'dev ALL=(ALL) ALL\\nDefaults:dev timestamp_timeout=0\\n' > /etc/sudoers.d/dev
+RUN echo "▶ Configuring sudo and SSH ..." && \\
+    printf 'dev ALL=(ALL) ALL\\nDefaults:dev timestamp_timeout=0\\n' > /etc/sudoers.d/dev
 
 RUN mkdir -p /var/run/sshd && \\
     sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \\
@@ -567,7 +579,7 @@ generate_profile_dockerfile() {
     if [[ ${#extra_dnf[@]} -gt 0 ]] && [[ -n "${extra_dnf[0]:-}" ]]; then
         local pkgs
         pkgs=$(printf '%s ' "${extra_dnf[@]}")
-        dnf_line="RUN dnf install -y ${pkgs} && dnf clean all"
+        dnf_line="RUN echo \"▶ Installing profile packages ...\" && dnf install -y ${pkgs} && dnf clean all && echo \"✓ Profile packages installed\""
     fi
 
     local ref2="PROFILE_${profile}_TOOLS[@]"
@@ -577,7 +589,7 @@ generate_profile_dockerfile() {
         local clean
         clean=$(echo "$tool" | sed 's/#.*//g' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
         if [ -n "$clean" ]; then
-            tools_runs="${tools_runs}RUN ${clean}
+            tools_runs="${tools_runs}RUN echo \"▶ Installing tool ...\" && ${clean}
 "
         fi
     done
@@ -589,7 +601,7 @@ generate_profile_dockerfile() {
         local clean
         clean=$(echo "$agent" | sed 's/#.*//g' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
         if [ -n "$clean" ]; then
-            agent_runs="${agent_runs}RUN ${clean}
+            agent_runs="${agent_runs}RUN echo \"▶ Installing agent ...\" && ${clean}
 "
         fi
     done
@@ -733,7 +745,8 @@ ${wrapper_init_block}
 
     # ── 4. Run startup hook ──
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
-        source "\${ROOTCONF}/startup.sh"
+        ( set +e; source "\${ROOTCONF}/startup.sh" ) || \
+            echo "⚠ startup.sh exited non-zero — continuing"
     fi
 
     # Install wrappers into PATH
@@ -897,18 +910,7 @@ PXYEOF
         fi
     fi
 
-    # Build extra env passthrough for custom variables
-    EXTRA_ENV_ARGS=""
-    if [ -n "\${SANDBOX_EXTRA_ENV:-}" ]; then
-        IFS=',' read -ra _EVARS <<< "\${SANDBOX_EXTRA_ENV}"
-        for _evar in "\${_EVARS[@]}"; do
-            EXTRA_ENV_ARGS="\${EXTRA_ENV_ARGS} \${_evar}=\$(printenv \${_evar} 2>/dev/null)"
-        done
-    fi
-
-    SANDBOX_ARGS="\$*"
-
-    exec runuser -u "\${U}" -- env \\
+    exec runuser -u "\${U}" --whitelist-environment="\${SANDBOX_EXTRA_ENV:-}" -- env \\
         HOME="\${HOME}" \\
         PATH="\${PATH}" \\
         TERM="\${TERM}" \\
@@ -921,7 +923,6 @@ PXYEOF
         http_proxy="\${http_proxy:-}" \\
         https_proxy="\${https_proxy:-}" \\
         NO_PROXY="\${NO_PROXY:-}" \\
-        \${EXTRA_ENV_ARGS} \\
         "\$@"
 else
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
@@ -934,6 +935,7 @@ EEOF
 
 # ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Build
+#  podman build: base image (shared) → profile image (agent-specific)
 # ═══════════════════════════════════════════════════════════════════════
 
 build_base() {
@@ -946,7 +948,11 @@ build_base() {
 
     scaffold_base
 
+    echo ""
     info "Building base image ${BASE_IMAGE_NAME} ..."
+    info "  This includes: system packages, external tools, SSH, sudo"
+    info "  First build takes several minutes (~1.4 GB download)"
+    echo ""
 
     local extra_args=()
     if [[ "$force" == "-f" ]]; then
@@ -960,7 +966,8 @@ build_base() {
         -t "${BASE_IMAGE_NAME}" \
         "${SANDBOX_BASE}/base"
 
-    ok "Base image built."
+    echo ""
+    ok "Base image ${BASE_IMAGE_NAME} built successfully."
 }
 
 build_profile() {
@@ -978,7 +985,9 @@ build_profile() {
 
     scaffold_profile "$profile"
 
+    echo ""
     info "Building profile '${profile}' → ${image_name} ..."
+    echo ""
 
     local extra_args=()
     if [[ "${1:-}" == "-f" ]]; then
@@ -990,7 +999,9 @@ build_profile() {
         -t "${image_name}" \
         "${phome}"
 
-    ok "Image ${image_name} built."
+    echo ""
+    ok "Profile '${profile}' built successfully."
+    ok "Run with: dev-sandbox -p ${profile}"
 }
 
 do_build() {
@@ -1004,6 +1015,7 @@ do_build() {
 
 # ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Run
+#  Assemble podman flags, start container, display startup info
 # ═══════════════════════════════════════════════════════════════════════
 
 do_run() {
@@ -1409,9 +1421,9 @@ do_clean() {
         for v in "${vol_pip}" "${vol_root}"; do
             pcmd volume rm "$v" 2>/dev/null && ok "Volume $v removed" || true
         done
-        # Extra profile volumes
-        local ref="PROFILE_${profile}_VOLUMES[@]"
-        local extra_vols=("${!ref}")
+        # Extra profile volumes (with default fallback)
+        local extra_vols=()
+        get_profile_array_ref "$profile" VOLUMES extra_vols
         for vdir in "${extra_vols[@]}"; do
             if [[ -n "$vdir" ]]; then
                 local vname="${profile}-sandbox-${vdir#.}"
@@ -1423,8 +1435,8 @@ do_clean() {
         echo ""
         warn "Volumes not removed (contain data):"
         warn "  podman volume rm ${vol_pip} ${vol_root}"
-        local ref="PROFILE_${profile}_VOLUMES[@]"
-        local extra_vols=("${!ref}")
+        local extra_vols=()
+        get_profile_array_ref "$profile" VOLUMES extra_vols
         for vdir in "${extra_vols[@]}"; do
             if [[ -n "$vdir" ]]; then
                 warn "  podman volume rm ${profile}-sandbox-${vdir#.}"
@@ -1472,50 +1484,9 @@ do_profiles() {
     done
 }
 
+
 # ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Info (show profile settings)
-# ═══════════════════════════════════════════════════════════════════════
-
-do_info() {
-    local profile="$1"
-    echo ""
-    info "=== Profile: ${profile} ==="
-    echo ""
-
-    local vars=(DESCRIPTION USE_KRUN NET_MODE SSH_PORT SSH_KEY
-                RUN_PRIVOXY PRIVOXY_SOCKS RAM CPUS COLOR
-                DROP_NET_ADMIN)
-
-    for var in "${vars[@]}"; do
-        local val
-        val=$(get_profile_var "$profile" "$var")
-        local source="default"
-        local ref="PROFILE_${profile}_${var}"
-        if [[ -n "${!ref+x}" ]]; then
-            source="profile"
-        fi
-        printf "  %-20s = %-40s [%s]\n" "$var" "${val:-(empty)}" "$source"
-    done
-
-    echo ""
-    echo "  Arrays:"
-    local arr_names=(AGENTS DNF TOOLS VOLUMES PODMAN_ARGS ENV ENV_PASS
-                     ROOT_WRAPPERS DEV_DOTFILES)
-    for var in "${arr_names[@]}"; do
-        local arr=()
-        get_profile_array_ref "$profile" "$var" arr
-        local count=${#arr[@]}
-        local source="default"
-        if [[ -n "$(declare -p "PROFILE_${profile}_${var}" 2>/dev/null)" ]]; then
-            source="profile"
-        fi
-        printf "  %-20s = %-40s [%s]\n" "$var" "${count} items" "$source"
-    done
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════════════
-#  INTERNAL — Info (show resolved profile settings)
 # ═══════════════════════════════════════════════════════════════════════
 
 do_info() {
@@ -1624,8 +1595,8 @@ do_status() {
             echo "  ✗ $v (missing)"
         fi
     done
-    local ref="PROFILE_${profile}_VOLUMES[@]"
-    local extra_vols=("${!ref}")
+    local extra_vols=()
+    get_profile_array_ref "$profile" VOLUMES extra_vols
     for vdir in "${extra_vols[@]}"; do
         if [[ -n "$vdir" ]]; then
             local vname="${profile}-sandbox-${vdir#.}"
@@ -1655,6 +1626,7 @@ do_status() {
 
 # ═══════════════════════════════════════════════════════════════════════
 #  INTERNAL — Help
+#  Usage text and examples
 # ═══════════════════════════════════════════════════════════════════════
 
 usage() {
@@ -1753,7 +1725,8 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════
-#  MAIN — Argument parsing
+#  MAIN — Argument parsing, conflict checks, dispatch
+#  Supports both --opt value and --opt=value formats
 # ═══════════════════════════════════════════════════════════════════════
 
 PROFILE="${DEFAULT_PROFILE}"
