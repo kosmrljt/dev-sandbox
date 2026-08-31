@@ -39,6 +39,17 @@ dev-sandbox
 
 The first run builds images (~1.6 GB, several minutes). Subsequent runs start in seconds. The default profile is configured for Claude Code — edit the script to change.
 
+Once inside, you are in an isolated container:
+
+```
+[claude] /app/my-project--[HASH]$          ← colored prompt shows profile name
+```
+
+- You are user `dev`, not your host user
+- Only your project directory is visible (mounted at `/app/...`)
+- Your home directory, SSH keys, and other host files are not accessible
+- pip packages, credentials, and config persist between sessions in named volumes
+- Type `exit` to leave
 
 ## Profiles
 
@@ -96,12 +107,6 @@ graph LR
 ## Usage examples
 
 ```bash
-# Basic — default profile
-dev-sandbox
-
-# Different profile
-dev-sandbox -p research
-
 # All traffic through SOCKS proxy on host
 dev-sandbox --proxy 1080
 
@@ -111,7 +116,7 @@ dev-sandbox --net locked
 # SSH for VS Code (requires --no-krun)
 dev-sandbox --no-krun --ssh-port 2228 --ssh-key ~/.ssh/id_ed25519.pub
 
-# Pass API key from host (never in script or CLI history)
+# Pass env from host (never in script or CLI history)
 dev-sandbox --env ANTHROPIC_API_KEY
 
 # Resource limits
