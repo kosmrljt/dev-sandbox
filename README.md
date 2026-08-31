@@ -63,7 +63,6 @@ dev-sandbox -p research             # empty template, add your agents
 dev-sandbox -p vncgui               # XFCE desktop
 vncviewer localhost:5901            # connect (password: sandbox)
 
-dev-sandbox -p claude --ssh-port 2228   # claude with SSH for VS Code
 ```
 
 Show resolved settings for any profile:
