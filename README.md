@@ -22,19 +22,20 @@ What this does **not** prevent: an agent can write to `.git/hooks` and persisten
 ## Quick start
 
 ```bash
-# Prerequisites (Fedora/RHEL)
+# Install (Fedora/RHEL)
 sudo dnf install podman crun-krun
 
-# Prerequisites (Ubuntu/Debian - without krun microVM: --no-krun) 
-sudo apt install podman  
+# Install (Ubuntu/Debian)
+sudo apt install podman
 
-# Install
+# Download
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
 chmod +x ~/.local/bin/dev-sandbox
 
-# Run
+# Run from your project directory (only this directory is visible inside the sandbox)
 cd ~/my-project
-dev-sandbox
+dev-sandbox                      # with krun (Fedora)
+dev-sandbox --no-krun            # without krun (Ubuntu or any Linux)
 ```
 
 The first run builds images (~1.6 GB, several minutes). Subsequent runs start in seconds. The default profile is configured for Claude Code — edit the script to change.
@@ -72,8 +73,8 @@ agy                                 # start agent inside container
 dev-sandbox -p research             # empty template, add your agents
 
 dev-sandbox -p vncgui               # XFCE desktop
-vncviewer localhost:5901            # connect (password: sandbox)
-
+# On host: connect with VNC viewer (e.g. TigerVNC)
+vncviewer localhost:5901            # password: sandbox
 ```
 
 Show resolved settings for any profile:
