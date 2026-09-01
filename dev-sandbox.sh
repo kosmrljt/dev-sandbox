@@ -37,7 +37,7 @@
 #    - Stronger isolation boundary (VM escape vs container escape)
 #    - With passt networking (krun.use_passt=1): nftables works
 #    - Without passt (TSI): bypasses netfilter, firewall ineffective
-#    - Use for: running untrusted code, production agents
+#    - Use for: running untrusted code
 #
 #  KEY PODMAN PARAMETERS USED
 #  --------------------------
@@ -164,7 +164,7 @@ DEFAULT_SSH_KEY=""                      # Path to public key
 DEFAULT_RUN_PRIVOXY=false               # Privoxy HTTP proxy
 DEFAULT_PRIVOXY_SOCKS="host.containers.internal:1080"
 DEFAULT_RAM="${DEV_SANDBOX_RAM:-4096}"   # Override with: DEV_SANDBOX_RAM=8192 dev-sandbox
-DEFAULT_CPUS="${DEV_SANDBOX_CPUS:-4}"   # Override with: DEV_SANDBOX_CPUS=8 dev-sandbox
+DEFAULT_CPUS="${DEV_SANDBOX_CPUS:-}"    # Empty = no limit. Override with: DEV_SANDBOX_CPUS=8 dev-sandbox
 DEFAULT_COLOR="0"                       # Prompt color (0=default, 32=green, 31=red, 33=yellow, 34=blue)
 DEFAULT_ENV=()                          # Extra env vars set in container (KEY=VALUE)
 DEFAULT_ENV_PASS=()                     # Env vars passed through from host (KEY only, no values in script)
@@ -573,8 +573,8 @@ generate_profile_dockerfile() {
     local phome
     phome=$(profile_home "$profile")
 
-    local ref="PROFILE_${profile}_DNF[@]"
-    local extra_dnf=("${!ref}")
+    local extra_dnf=()
+    get_profile_array_ref "$profile" DNF extra_dnf
     local dnf_line=""
     if [[ ${#extra_dnf[@]} -gt 0 ]] && [[ -n "${extra_dnf[0]:-}" ]]; then
         local pkgs
@@ -582,8 +582,8 @@ generate_profile_dockerfile() {
         dnf_line="RUN echo \"▶ Installing profile packages ...\" && dnf install -y ${pkgs} && dnf clean all && echo \"✓ Profile packages installed\""
     fi
 
-    local ref2="PROFILE_${profile}_TOOLS[@]"
-    local extra_tools=("${!ref2}")
+    local extra_tools=()
+    get_profile_array_ref "$profile" TOOLS extra_tools
     local tools_runs=""
     for tool in "${extra_tools[@]}"; do
         local clean
@@ -594,8 +594,8 @@ generate_profile_dockerfile() {
         fi
     done
 
-    local ref3="PROFILE_${profile}_AGENTS[@]"
-    local agents=("${!ref3}")
+    local agents=()
+    get_profile_array_ref "$profile" AGENTS agents
     local agent_runs=""
     for agent in "${agents[@]}"; do
         local clean
@@ -1090,11 +1090,16 @@ do_run() {
     if [[ "$use_krun" == "true" ]]; then
         krun_flags+=(--annotation "run.oci.handler=krun")
         krun_flags+=(--annotation "krun.ram_mib=${effective_ram}")
-        krun_flags+=(--annotation "krun.cpus=${effective_cpus}")
+        # krun needs a CPU value — default to available cores
+        local krun_cpus="${effective_cpus:-$(nproc)}"
+        krun_flags+=(--annotation "krun.cpus=${krun_cpus}")
         runtime_label="krun microVM"
     else
         krun_flags+=(--memory "${effective_ram}m")
-        krun_flags+=(--cpus "${effective_cpus}")
+        # --cpus only when explicitly set (requires cgroup cpu delegation)
+        if [[ -n "${effective_cpus}" ]]; then
+            krun_flags+=(--cpus "${effective_cpus}")
+        fi
         runtime_label="container"
     fi
 
@@ -1263,10 +1268,11 @@ do_run() {
     info "Starting ${runtime_label} ..."
     info "  Profile:  ${profile} — ${desc}"
     info "  Project:  ${project_dir} → ${mount_point}"
+    local cpu_label="${effective_cpus:-all}"
     if [[ "$use_krun" == "true" ]]; then
-        info "  RAM/CPU:  ${effective_ram} MiB / ${effective_cpus} cores"
+        info "  RAM/CPU:  ${effective_ram} MiB / ${cpu_label} cores"
     else
-        info "  RAM/CPU:  ${effective_ram} MiB / ${effective_cpus} cores (limits)"
+        info "  RAM/CPU:  ${effective_ram} MiB / ${cpu_label} cores (limits)"
     fi
     info "  Image:    ${image_name}"
     info "  Network:  ${net_label}"
@@ -1475,8 +1481,8 @@ do_profiles() {
         echo -e "    ${desc}"
         echo -e "    Image: ${img_status}"
 
-        local ref="PROFILE_${p}_AGENTS[@]"
-        local agents=("${!ref}")
+        local agents=()
+        get_profile_array_ref "$p" AGENTS agents
         if [[ ${#agents[@]} -gt 0 ]] && [[ -n "${agents[0]:-}" ]]; then
             echo "    Agents: ${#agents[@]}"
         fi
