@@ -173,7 +173,7 @@ Optional: **gocryptfs** for encrypted directories, **btrfs** for quotas and snap
 
 ## Related
 
-[urllight](https://github.com/kosmrljt/urllight) — SOCKS5 proxy with live terminal dashboard. Route sandbox traffic through it to see every connection and DNS query.
+[sockLight](https://github.com/kosmrljt/socklight) — SOCKS5 proxy with live terminal dashboard. Route sandbox traffic through it to see every connection and DNS query.
 
 ## License
 
