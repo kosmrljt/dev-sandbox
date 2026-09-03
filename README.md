@@ -17,7 +17,6 @@ AI coding agents need shell access and run arbitrary code. Without isolation:
 
 dev-sandbox runs each agent in its own isolated environment with only the current project directory visible.
 
-What this does **not** prevent: an agent can write to `.git/hooks` and persistent volumes, which execute on the next run. See [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Quick start
 
@@ -38,7 +37,7 @@ dev-sandbox                      # with krun (Fedora)
 dev-sandbox --no-krun            # without krun (Ubuntu or any Linux)
 ```
 
-On first run, the script builds the container image (~1.6 GB, several minutes). After that it starts in seconds. It remembers agent setup and logins, so you can resume previous sessions seamlessly. The default profile is configured for Claude Code — edit the script to customize.
+On first run, the script builds the container image (~1.6 GB, several minutes). After that it starts in seconds. It remembers agent setup and logins, so you can resume previous sessions seamlessly. 
 
 Once inside, you are in an isolated container:
 
@@ -174,11 +173,12 @@ If running dev-sandbox from a **gocryptfs**-mounted directory, mount with `-allo
 
 ## Known limitations
 
+-- **Workspace Security**: An agent can write to `.git/hooks` and persistent volumes, which execute on the next run. See [docs/SECURITY.md](docs/SECURITY.md).
 - **krun + SSH port mapping**: Does not work with passt networking. The script uses passt when firewall is active or SSH is off, TSI otherwise.
 - **TSI connection bottleneck**: TSI stalls under many concurrent connections (e.g. loading a portal with many resources). This is why passt is preferred. Use `--tsi` only for testing.
 - **No `podman exec` with krun**: Use SSH or tmux for additional terminals.
-- **`.git/hooks`**: Bind-mounted project directory is writable. An agent can plant hooks that execute on the host. Review changes after sessions.
 - **tty warning**: `tty: ttyname error` on krun startup is cosmetic.
+
 
 ## Related
 
