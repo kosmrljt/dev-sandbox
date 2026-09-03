@@ -44,7 +44,6 @@ dev-sandbox --no-krun            # without krun (Ubuntu or any Linux)
 ```
 
 First run: Builds the container image (~1.4 GB, takes a few minutes).
-
 Subsequent runs: Starts in (mili)seconds. Agent setup and logins are preserved across sessions.
 
 Once inside, you are in an isolated container:
@@ -115,8 +114,6 @@ All flags: `dev-sandbox help`
 - **crun-krun** — optional, for krun microVM mode. Without it, use `--no-krun` for standard containers
 - **passt** — usually installed with crun-krun
 
-Optional: **gocryptfs** for encrypted directories, **btrfs** for quotas and snapshots.
-
 If running dev-sandbox from a **gocryptfs**-mounted directory, mount with `-allow_other` and enable `user_allow_other` in `/etc/fuse.conf`. Otherwise Podman's user namespace cannot access the FUSE mount.
 
 
@@ -131,7 +128,7 @@ If running dev-sandbox from a **gocryptfs**-mounted directory, mount with `-allo
 
 krun runs its own Linux kernel inside a microVM — a different isolation boundary than container namespaces. Standard container shares the host kernel but has full support for SSH tunneling and firewall.
 
-Default is krun. Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```mermaid
 graph LR
