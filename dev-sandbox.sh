@@ -305,7 +305,6 @@ PROFILE_research_RUN_PRIVOXY=true
 PROFILE_research_AGENTS=(
     # Uncomment or add as needed
     # 'pip install --user aider-chat'
-    # 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
     # 'pip install --user open-interpreter'
 )
 PROFILE_research_DNF=(
@@ -441,7 +440,7 @@ get_profile_array_ref() {
 }
 
 # Derive names from profile
-profile_image()      { echo "${1}-sandbox-krun"; }
+profile_image()      { echo "${1}-sandbox-image"; }
 profile_home()       { echo "${SANDBOX_BASE}/${1}"; }
 profile_vol_pip()    { echo "${1}-sandbox-local"; }
 profile_vol_root()   { echo "${1}-sandbox-rootconf"; }
@@ -454,7 +453,25 @@ check_prereqs() {
     local missing=0
 
     if ! command -v podman &>/dev/null; then
-        err "podman not installed: sudo dnf install podman"
+        err "podman not installed"
+        err "  Fedora/RHEL: sudo dnf install podman"
+        err "  Ubuntu/Debian: sudo apt install podman"
+        missing=1
+    else
+        # Check podman version >= 4.0
+        local podman_ver
+        podman_ver=$(podman --version 2>/dev/null | grep -oP '\d+\.\d+' | head -1)
+        local podman_major="${podman_ver%%.*}"
+        if [[ "${podman_major:-0}" -lt 4 ]]; then
+            err "podman ${podman_ver} too old — requires 4.0+"
+            missing=1
+        fi
+    fi
+
+    if ! command -v crun &>/dev/null; then
+        err "crun not installed"
+        err "  Fedora/RHEL: sudo dnf install crun"
+        err "  Ubuntu/Debian: sudo apt install crun"
         missing=1
     fi
 
@@ -1332,6 +1349,15 @@ do_run() {
     local profile_args=()
     get_profile_array_ref "$profile" PODMAN_ARGS profile_args
 
+    # Close inherited file descriptors > 2 (leaked by shell tools like
+    # Starship, direnv, ssh-agent — causes crun "cannot stat /proc/self/fd/N"
+    # errors on some systems)
+    #for fd in $(ls /proc/$$/fd/ 2>/dev/null); do
+    #    if [[ "$fd" -gt 2 ]]; then
+    #        eval "exec $fd>&-" 2>/dev/null || true
+    #    fi
+    #done
+
     pcmd run --rm -it \
         --name "${container_name}" \
         --hostname "${profile}-sandbox" \
@@ -1341,6 +1367,7 @@ do_run() {
         "${cap_flags[@]}" \
         "${profile_args[@]}" \
         --security-opt label=disable \
+        --security-opt apparmor=unconfined \
         --userns keep-id \
         -v "${project_dir}:${mount_point}" \
         -v "${vol_pip}:/home/dev/.local" \
@@ -1473,7 +1500,7 @@ do_profiles() {
         local img_status="${RED}not built${NC}"
         if pcmd image exists "${image_name}" 2>/dev/null; then
             local size
-            size=$(pcmd images "${image_name}" --format "{{.Size}}" 2>/dev/null)
+            size=$(pcmd images "${image_name}" --format "{{.Size}}" 2>/dev/null | head -n 1)
             img_status="${GREEN}${size}${NC}"
         fi
 
@@ -1580,21 +1607,23 @@ do_status() {
     echo "  Sandbox base:  ${SANDBOX_BASE}"
     echo "  Profile home:  ${phome}"
     echo "  Base OS:       ${BASE_OS}"
-    echo "  RAM:           ${DEFAULT_RAM} MiB"
-    echo "  CPU:           ${DEFAULT_CPUS}"
-    echo "  Vol pip:       ${vol_pip}"
-    echo "  Vol rootconf:  ${vol_root}"
+    local status_ram
+    status_ram=$(get_profile_var "$profile" RAM)
+    local status_cpus
+    status_cpus=$(get_profile_var "$profile" CPUS)
+    echo "  RAM:           ${status_ram:-${DEFAULT_RAM}} MiB"
+    echo "  CPU:           ${status_cpus:-all}"
 
     echo ""
     echo "Images:"
     echo -n "  Base:    "
-    pcmd images "${BASE_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null || echo "not built"
+    pcmd images "${BASE_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1 || echo "not built"
     echo -n "  Profile: "
-    pcmd images "${image_name}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null || echo "not built"
+    pcmd images "${image_name}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1 || echo "not built"
 
     echo ""
     echo "Volumes:"
-    for v in "${vol_pip}" "${vol_root}"; do
+    for v in  "${vol_root}" "${vol_pip}"; do
         if pcmd volume exists "$v" 2>/dev/null; then
             echo "  ✓ $v"
         else
@@ -1638,77 +1667,54 @@ do_status() {
 usage() {
     cat << EOF
 
-${CYAN}dev-sandbox${NC} — Sandboxed AI Coding Agents
+${CYAN}dev-sandbox${NC} — Sandboxed AI Coding Agents with Podman & krun microVMs
 
-${GREEN}Usage:${NC}
-  dev-sandbox                           Default profile (${DEFAULT_PROFILE})
-  dev-sandbox -p <profile>              Select profile
-  dev-sandbox -p <profile> build        Build profile image
-  dev-sandbox -p <profile> build -f     Rebuild without cache
-  dev-sandbox profiles                  List profiles
-  dev-sandbox ls                        List running sandboxes
-  dev-sandbox status                    Status of default profile
-  dev-sandbox -p <profile> status       Status of specific profile
-  dev-sandbox -p <profile> clean        Remove profile image
-  dev-sandbox -p <profile> clean --purge  Remove image AND all volumes
-  dev-sandbox help                      This help
+${GREEN}Syntax:${NC}
+  dev-sandbox [OPTIONS]
+  dev-sandbox [OPTIONS] <command>
 
-${GREEN}Network:${NC}
-  (no flag)                             Full internet (default)
-  --net open                            Full internet (override profile)
-  --net locked                          Locked — no outbound traffic
-  --allow host:port                     Allow only this destination (repeatable)
-                                        Automatically locks everything else
-  --allow-dns                           Allow DNS to resolvers in /etc/resolv.conf
-  --allow-dns host[:port]               Allow DNS only to this resolver
+${GREEN}Commands:${NC}
+  (none)                  Start sandbox container/microVM (default)
+  build [-f]              Build profile image (-f: rebuild without cache)
+  profiles                List all configured profiles
+  ls                      List currently running sandboxes
+  status                  Show system status and image/volume health
+  clean [--purge]         Remove image (--purge: also delete all volumes)
+  help                    Show this help message
 
-${GREEN}Runtime:${NC}
-  --no-krun                             Standard container (no microVM)
-  --krun                                Force microVM (override profile)
-  --tsi                                 Force TSI networking (skip passt)
-  --ram MiB                             Memory limit (default: ${DEFAULT_RAM})
-  --cpus N                              CPU cores limit (default: ${DEFAULT_CPUS})
-  --force                               Kill active session and restart
+${GREEN}Profile & Config:${NC}
+  -p <profile>            Select profile (default: ${DEFAULT_PROFILE})
+  --config PATH           Source custom shell configuration/profile script
 
-${GREEN}Services:${NC}
-  --ssh-port PORT                       SSH server port (0 = disabled)
-  --ssh-key ~/.ssh/id_ed25519.pub       SSH public key for passwordless auth
-  --run-privoxy                         Enable Privoxy HTTP proxy
-  --no-privoxy                          Disable Privoxy (override profile)
-  --privoxy-socks host:port             Where Privoxy forwards traffic
-  --proxy PORT                          Shortcut: --allow + --run-privoxy + --privoxy-socks
-                                        Routes all traffic through SOCKS proxy on host
-  --env KEY=VALUE                       Pass env variable to container (repeatable)
-  --env KEY                             Pass through from host env (no value in CLI)
+${GREEN}Runtime & Isolation:${NC}
+  --krun                  Force krun microVM isolation (default)
+  --no-krun               Use standard container (shares host kernel)
+  --tsi                   Force TSI networking (bypasses passt/firewall)
+  --ram MiB               Memory limit (default: ${DEFAULT_RAM})
+  --cpus N                CPU core limit (default: ${DEFAULT_CPUS:-all})
+  --force                 Terminate existing session for directory and restart
+
+${GREEN}Network Control:${NC}
+  --net open              Unrestricted outbound access (default)
+  --net locked            Block all outbound traffic (loopback only)
+  --allow host:port       Allow only specified egress destination (repeatable)
+  --allow-dns [host[:p]]  Allow DNS resolution (resolv.conf or custom server)
+
+${GREEN}Services & Environment:${NC}
+  --proxy PORT            Shortcut: route all traffic via host SOCKS5 proxy
+  --run-privoxy           Enable Privoxy HTTP proxy (:8118)
+  --no-privoxy            Disable Privoxy (override profile)
+  --privoxy-socks host:p  Upstream SOCKS proxy for Privoxy
+  --ssh-port PORT         Enable SSH server on host port (0 = disabled)
+  --ssh-key PATH          Install public key for passwordless SSH access
+  --env KEY=VALUE         Set environment variable inside container (repeatable)
+  --env KEY               Forward host environment variable (repeatable)
 
 ${GREEN}Examples:${NC}
-  dev-sandbox                           Claude, full internet
-  dev-sandbox --allow host:1080         Claude, outbound only to SOCKS proxy
-  dev-sandbox -p research --net locked  Research, complete isolation
-  dev-sandbox -p research \\
-    --allow host:1080 --allow host:22 \\
-    --run-privoxy --privoxy-socks host:1080
-                                        Research, full proxy chain
-
-${GREEN}Profiles:${NC}
-EOF
-    for p in "${ALL_PROFILES[@]}"; do
-        local desc
-        desc=$(get_profile_var "$p" DESCRIPTION)
-        local marker=""
-        if [[ "$p" == "$DEFAULT_PROFILE" ]]; then marker=" (default)"; fi
-        echo "  ${p}${marker} — ${desc}"
-    done
-
-    cat << EOF
-
-${GREEN}Configuration:${NC}
-  Sandbox base:     ${SANDBOX_BASE}
-  Base OS:          ${BASE_OS}
-  RAM:              ${DEFAULT_RAM} MiB  (DEV_SANDBOX_RAM)
-  CPU:              ${DEFAULT_CPUS}        (DEV_SANDBOX_CPUS)
-  Storage:          ${PODMAN_STORAGE:-default podman storage}  (DEV_SANDBOX_STORAGE)
-  Base packages:    ${#BASE_DNF_PACKAGES[@]}
+  dev-sandbox                                 Claude profile, full internet
+  dev-sandbox -p research --net locked        Untrusted agent, complete isolation
+  dev-sandbox --config my-agents.sh -p coder  Use custom profile from external file
+  dev-sandbox --proxy 1080                    Route all traffic via host SOCKS proxy
 
 ${GREEN}Architecture:${NC}
   Base image (shared)  ←  DNF packages, external tools, user setup
@@ -1717,15 +1723,6 @@ ${GREEN}Architecture:${NC}
        ↓
   krun microVM         ←  own kernel, passt networking (default)
   or container         ←  shared host kernel (--no-krun)
-
-${GREEN}Customization:${NC}
-  Base packages:    edit BASE_DNF_PACKAGES[] / BASE_EXTERNAL_TOOLS[]
-  New profile:      add PROFILE_<name>_* block and name to ALL_PROFILES
-  After changes:    dev-sandbox -p <profile> build -f
-
-${YELLOW}Requirements:${NC}
-  sudo dnf install podman crun-krun
-  gocryptfs -allow_other (for encrypted directories)
 
 EOF
 }
@@ -1736,6 +1733,7 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════
 
 PROFILE="${DEFAULT_PROFILE}"
+CONFIG_FILE=""              # --config /path/to/config.sh
 USE_KRUN=true
 KRUN_CLI_SET=""             # Set to "true" when --krun/--no-krun is used
 TSI_OVERRIDE=false          # --tsi (force TSI networking, skip passt)
@@ -1764,6 +1762,21 @@ parse_opt_value() {
 
 while [[ "${1:-}" == -* ]]; do
     case "${1:-}" in
+        --config|--config=*)
+            val=""
+            if val=$(parse_opt_value "$1"); then shift
+            elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
+            else err "Missing config file. Usage: --config <path>"; exit 1; fi
+
+            if [[ ! -f "$val" ]]; then
+                err "Config file not found: $val"
+                exit 1
+            fi
+
+            CONFIG_FILE="$val"
+            # shellcheck source=/dev/null
+            source "$CONFIG_FILE"
+            ;;
         --no-krun)
             USE_KRUN=false
             KRUN_CLI_SET=true
