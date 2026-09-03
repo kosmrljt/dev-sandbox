@@ -37,7 +37,9 @@ dev-sandbox                      # with krun (Fedora)
 dev-sandbox --no-krun            # without krun (Ubuntu or any Linux)
 ```
 
-On first run, the script builds the container image (~1.6 GB, several minutes). After that it starts in seconds. It remembers agent setup and logins, so you can resume previous sessions seamlessly. 
+First run: Builds the container image (~1.4 GB, takes a few minutes).
+
+Subsequent runs: Starts in (mili)seconds. Agent setup and logins are preserved across sessions.
 
 Once inside, you are in an isolated container:
 
