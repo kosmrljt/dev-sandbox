@@ -26,7 +26,7 @@ What this does **not** prevent: an agent can write to `.git/hooks` and persisten
 sudo dnf install podman crun-krun
 
 # Install (Ubuntu/Debian)
-sudo apt install podman
+sudo apt install podman crun
 
 # Download
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
