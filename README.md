@@ -22,23 +22,23 @@ What this does **not** prevent: an agent can write to `.git/hooks` and persisten
 ## Quick start
 
 ```bash
-# Install (Fedora/RHEL)
+# Prerequisites (Fedora/RHEL)
 sudo dnf install podman crun-krun
 
-# Install (Ubuntu/Debian)
+# Prerequisites (Ubuntu/Debian)
 sudo apt install podman crun
 
-# Download
+# Install
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
 chmod +x ~/.local/bin/dev-sandbox
 
-# Run from your project directory (only this directory is visible inside the sandbox)
+# Run from your project directory
 cd ~/my-project
 dev-sandbox                      # with krun (Fedora)
 dev-sandbox --no-krun            # without krun (Ubuntu or any Linux)
 ```
 
-The first run builds images (~1.6 GB, several minutes). Subsequent runs start in seconds. The default profile is configured for Claude Code — edit the script to change.
+On first run, the script builds the container image (~1.6 GB, several minutes). After that it starts in seconds. It remembers agent setup and logins, so you can resume previous sessions seamlessly. The default profile is configured for Claude Code — edit the script to customize.
 
 Once inside, you are in an isolated container:
 
@@ -51,6 +51,13 @@ Once inside, you are in an isolated container:
 - Your home directory, SSH keys, and other host files are not accessible
 - pip packages, credentials, and config persist between sessions in named volumes
 - Type `exit` to leave
+
+<details>
+  <summary>Demo</summary>
+  
+  <br>
+  <img src="https://github.com/kosmrljt/dev-sandbox/blob/main/docs/demo.gif" alt="Demo">
+</details>
 
 ## Profiles
 
@@ -157,11 +164,13 @@ Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Requirements
 
-- **Podman 4.x+** — `sudo dnf install podman` (Fedora/RHEL), `sudo apt install podman` (Ubuntu/Debian)
+- **Podman 4.x+** 
 - **crun-krun** — optional, for krun microVM mode. Without it, use `--no-krun` for standard containers
 - **passt** — usually installed with crun-krun
 
 Optional: **gocryptfs** for encrypted directories, **btrfs** for quotas and snapshots.
+
+If running dev-sandbox from a **gocryptfs**-mounted directory, mount with `-allow_other` and enable `user_allow_other` in `/etc/fuse.conf`. Otherwise Podman's user namespace cannot access the FUSE mount.
 
 ## Known limitations
 
