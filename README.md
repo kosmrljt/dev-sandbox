@@ -20,6 +20,12 @@ dev-sandbox runs each agent in its own isolated environment with only the curren
 
 ## Quick start
 
+<details>
+  <summary>Demo</summary>
+  <br>
+  <img src="https://github.com/kosmrljt/dev-sandbox/blob/main/docs/demo.gif" alt="Demo">
+</details>
+
 ```bash
 # Prerequisites (Fedora/RHEL)
 sudo dnf install podman crun-krun
@@ -53,12 +59,7 @@ Once inside, you are in an isolated container:
 - pip packages, credentials, and config persist between sessions in named volumes
 - Type `exit` to leave
 
-<details>
-  <summary>Demo</summary>
-  
-  <br>
-  <img src="https://github.com/kosmrljt/dev-sandbox/blob/main/docs/demo.gif" alt="Demo">
-</details>
+
 
 ## Profiles
 
