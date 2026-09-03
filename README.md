@@ -65,21 +65,16 @@ Once inside, you are in an isolated container:
 
 Four built-in profiles with color-coded prompts. Each is isolated — separate volumes, credentials, and settings.
 
-| Profile | Agent | Color | Description |
+| Profile | Agent | Color | Description | 
 |---|---|---|---|
-| `claude` (default) | Claude Code | Green |  |
+| `claude` (default) | Claude Code: claude | Green |  |
 | `research` | None (template) | Red | Add your own untrusted agents |
-| `agy` | Antigravity | Yellow | Google AI agent |
+| `agy` | Antigravity: agy | Yellow | Google AI agent |
 | `vncgui` | GUI apps | Purple | VNC + XFCE desktop |
 
 ```bash
 dev-sandbox                         # claude (default)
 claude                              # start agent inside container
-
-dev-sandbox -p agy                  # antigravity
-agy                                 # start agent inside container
-
-dev-sandbox -p research             # empty template, add your agents
 
 dev-sandbox -p vncgui               # XFCE desktop
 # On host: connect with VNC viewer (e.g. TigerVNC)
