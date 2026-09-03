@@ -87,6 +87,27 @@ Show resolved settings for any profile:
 dev-sandbox info                    # default profile
 dev-sandbox -p research info        # specific profile
 ```
+## Usage examples
+
+```bash
+# All traffic through SOCKS proxy on host
+dev-sandbox --proxy 1080
+
+# No outbound traffic
+dev-sandbox --net locked
+
+# SSH for VS Code (requires --no-krun)
+dev-sandbox --no-krun --ssh-port 2228 --ssh-key ~/.ssh/id_ed25519.pub
+
+# Pass env from host (never in script or CLI history)
+dev-sandbox --env ANTHROPIC_API_KEY
+
+# Resource limits
+dev-sandbox --ram 8192 --cpus 8
+```
+
+All flags: `dev-sandbox help`
+
 
 ## Choosing a runtime
 
@@ -109,26 +130,6 @@ graph LR
     Project[Project Dir] -->|bind mount| Container
 ```
 
-## Usage examples
-
-```bash
-# All traffic through SOCKS proxy on host
-dev-sandbox --proxy 1080
-
-# No outbound traffic
-dev-sandbox --net locked
-
-# SSH for VS Code (requires --no-krun)
-dev-sandbox --no-krun --ssh-port 2228 --ssh-key ~/.ssh/id_ed25519.pub
-
-# Pass env from host (never in script or CLI history)
-dev-sandbox --env ANTHROPIC_API_KEY
-
-# Resource limits
-dev-sandbox --ram 8192 --cpus 8
-```
-
-All flags: `dev-sandbox help`
 
 ## Configuration
 
