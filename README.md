@@ -170,7 +170,7 @@ Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Known limitations
 
--- **Workspace Security**: An agent can write to `.git/hooks` and persistent volumes, which execute on the next run. See [docs/SECURITY.md](docs/SECURITY.md).
+- **Workspace Security**: An agent can write to `.git/hooks` and persistent volumes, which execute on the next run. See [docs/SECURITY.md](docs/SECURITY.md).
 - **krun + SSH port mapping**: Does not work with passt networking. The script uses passt when firewall is active or SSH is off, TSI otherwise.
 - **TSI connection bottleneck**: TSI stalls under many concurrent connections (e.g. loading a portal with many resources). This is why passt is preferred. Use `--tsi` only for testing.
 - **No `podman exec` with krun**: Use SSH or tmux for additional terminals.
