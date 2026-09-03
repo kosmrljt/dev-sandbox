@@ -109,6 +109,17 @@ dev-sandbox --ram 8192 --cpus 8
 All flags: `dev-sandbox help`
 
 
+## Requirements
+
+- **Podman 4.x+** 
+- **crun-krun** — optional, for krun microVM mode. Without it, use `--no-krun` for standard containers
+- **passt** — usually installed with crun-krun
+
+Optional: **gocryptfs** for encrypted directories, **btrfs** for quotas and snapshots.
+
+If running dev-sandbox from a **gocryptfs**-mounted directory, mount with `-allow_other` and enable `user_allow_other` in `/etc/fuse.conf`. Otherwise Podman's user namespace cannot access the FUSE mount.
+
+
 ## Choosing a runtime
 
 | Need | Runtime |
@@ -159,16 +170,6 @@ ALL_PROFILES=(claude research agy vncgui test)
 Settings resolve: CLI flag > Profile > Environment > Default.
 
 Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
-## Requirements
-
-- **Podman 4.x+** 
-- **crun-krun** — optional, for krun microVM mode. Without it, use `--no-krun` for standard containers
-- **passt** — usually installed with crun-krun
-
-Optional: **gocryptfs** for encrypted directories, **btrfs** for quotas and snapshots.
-
-If running dev-sandbox from a **gocryptfs**-mounted directory, mount with `-allow_other` and enable `user_allow_other` in `/etc/fuse.conf`. Otherwise Podman's user namespace cannot access the FUSE mount.
 
 ## Known limitations
 
