@@ -85,7 +85,7 @@ fi
 SANDBOX_BASE="${HOME}/.dev-sandbox"     # Build files location
 BASE_IMAGE_NAME="dev-sandbox-base"      # Base podman image name
 DEFAULT_PROFILE="claude"                # Profile used without -p
-VERSION="1.1.0"                         # dev-sandbox version
+VERSION="1.1.1"                         # dev-sandbox version
 
 # Base OS
 BASE_OS="fedora:44"
