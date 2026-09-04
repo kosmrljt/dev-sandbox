@@ -21,7 +21,7 @@ dev-sandbox runs each agent in its own isolated environment with only the curren
 ## Quick start
 
 <details>
-  <summary>Demo</summary>
+  <summary>▶️ Watch a short demo (GIF)</summary>
   <br>
   <img src="https://github.com/kosmrljt/dev-sandbox/blob/main/docs/demo.gif" alt="Demo">
 </details>
