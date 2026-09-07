@@ -181,6 +181,14 @@ Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 [sockLight](https://github.com/kosmrljt/socklight) — SOCKS5 proxy with live terminal dashboard. Route sandbox traffic through it to see every connection and DNS query.
 
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — how dev-sandbox works (images, volumes, networking, krun vs standard containers)
+- [Configuration](docs/CONFIGURATION.md) — all profile variables, priority chain, persistence, CLI reference
+- [Security model](docs/SECURITY.md) — isolation boundaries, known limitations, sudo password handling, network modes
+- [Testing guide](docs/TESTING.md) — step-by-step tests for all features, can be also a practical tutorial
+- [Bash tricks](docs/BASH-TRICKS.md) — patterns and gotchas discovered while building the script
+
 ## License
 
 MIT © Tomaž Košmrlj
