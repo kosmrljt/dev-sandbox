@@ -141,7 +141,8 @@ BASE_DNF_PACKAGES=(
 # ── Base image external tools (binary, not from DNF) ──
 BASE_EXTERNAL_TOOLS=(
     # DuckDB — SQL analytics on local files
-    'curl -L "https://github.com/duckdb/duckdb/releases/latest/download/duckdb_cli-linux-amd64.zip" -o "duckdb.zip"
+    'DUCK_ARCH=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/aarch64/") &&
+     curl -L "https://github.com/duckdb/duckdb/releases/latest/download/duckdb_cli-linux-${DUCK_ARCH}.zip" -o "duckdb.zip"
      && unzip duckdb.zip -d /usr/local/bin && rm duckdb.zip && chmod +x /usr/local/bin/duckdb'
 
     # Bun — fast JS/TS runtime
@@ -493,8 +494,10 @@ check_prereqs() {
             missing=1
         fi
 
-        local ver
-        ver=$(rpm -q --qf '%{VERSION}' libkrun 2>/dev/null || echo "0.0")
+        local ver="0.0"
+        if command -v rpm &>/dev/null && rpm -q libkrun &>/dev/null; then
+            ver=$(rpm -q --qf '%{VERSION}' libkrun 2>/dev/null || echo "0.0")
+        fi
         local major minor
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
@@ -927,7 +930,19 @@ PXYEOF
         fi
     fi
 
-    exec runuser -u "\${U}" --whitelist-environment="\${SANDBOX_EXTRA_ENV:-}" -- env \\
+    # Build whitelist — extra env + proxy vars (only if set)
+    _whitelist="\${SANDBOX_EXTRA_ENV:-}"
+    for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY; do
+        if [ -n "\$(printenv \$_pvar 2>/dev/null)" ]; then
+            if [ -n "\$_whitelist" ]; then
+                _whitelist="\${_whitelist},\${_pvar}"
+            else
+                _whitelist="\${_pvar}"
+            fi
+        fi
+    done
+
+    exec runuser -u "\${U}" --whitelist-environment="\${_whitelist}" -- env \\
         HOME="\${HOME}" \\
         PATH="\${PATH}" \\
         TERM="\${TERM}" \\
@@ -935,11 +950,6 @@ PXYEOF
         CLAUDE_CONFIG_DIR="\${CLAUDE_CONFIG_DIR}" \\
         PYTHONUSERBASE="\${PYTHONUSERBASE}" \\
         LANG="\${LANG}" \\
-        HTTP_PROXY="\${HTTP_PROXY:-}" \\
-        HTTPS_PROXY="\${HTTPS_PROXY:-}" \\
-        http_proxy="\${http_proxy:-}" \\
-        https_proxy="\${https_proxy:-}" \\
-        NO_PROXY="\${NO_PROXY:-}" \\
         "\$@"
 else
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
@@ -1617,9 +1627,17 @@ do_status() {
     echo ""
     echo "Images:"
     echo -n "  Base:    "
-    pcmd images "${BASE_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1 || echo "not built"
+    if pcmd image exists "${BASE_IMAGE_NAME}" 2>/dev/null; then
+        pcmd images "${BASE_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1
+    else
+        echo "not built"
+    fi
     echo -n "  Profile: "
-    pcmd images "${image_name}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1 || echo "not built"
+    if pcmd image exists "${image_name}" 2>/dev/null; then
+        pcmd images "${image_name}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1
+    else
+        echo "not built"
+    fi
 
     echo ""
     echo "Volumes:"
@@ -1733,30 +1751,46 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════
 
 # Pre-scan for --config (must load before profile validation)
-for _arg in "$@"; do
-    case "$_arg" in
-        --config=*) 
-            _cfg="${_arg#*=}"
-            if [[ -f "$_cfg" ]]; then
-                source "$_cfg"
+# Config file lookup: absolute/relative path first, then ~/.dev-sandbox/
+_resolve_config() {
+    local cfg="$1"
+    if [[ -f "$cfg" ]]; then
+        echo "$cfg"
+    elif [[ "$cfg" != /* ]] && [[ -f "${SANDBOX_BASE}/${cfg}" ]]; then
+        echo "${SANDBOX_BASE}/${cfg}"
+    else
+        echo ""
+    fi
+}
+
+_args=("$@")
+for (( _i=0; _i<${#_args[@]}; _i++ )); do
+    case "${_args[$_i]}" in
+        --config=*)
+            _cfg="${_args[$_i]#*=}"
+            _resolved=$(_resolve_config "$_cfg")
+            if [[ -n "$_resolved" ]]; then
+                source "$_resolved"
             else
-                echo "✗ Config file not found: $_cfg" >&2; exit 1
+                echo "✗ Config file not found: $_cfg" >&2
+                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
+                exit 1
             fi
             ;;
         --config)
-            # Next arg is the path — find it
-            _found_config=false
-            for _next in "$@"; do
-                if [[ "$_found_config" == "true" ]]; then
-                    if [[ -f "$_next" ]]; then
-                        source "$_next"
-                    else
-                        echo "✗ Config file not found: $_next" >&2; exit 1
-                    fi
-                    break
-                fi
-                [[ "$_next" == "--config" ]] && _found_config=true
-            done
+            _cfg="${_args[$((_i+1))]:-}"
+            if [[ -z "$_cfg" ]]; then
+                echo "✗ Missing config file path after --config" >&2; exit 1
+            fi
+            _resolved=$(_resolve_config "$_cfg")
+            if [[ -n "$_resolved" ]]; then
+                source "$_resolved"
+                ((_i++))
+            else
+                echo "✗ Config file not found: $_cfg" >&2
+                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
+                exit 1
+            fi
             ;;
     esac
 done
