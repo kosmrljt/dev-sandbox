@@ -84,8 +84,8 @@ fi
 # Paths and names
 SANDBOX_BASE="${HOME}/.dev-sandbox"     # Build files location
 BASE_IMAGE_NAME="dev-sandbox-base"      # Base podman image name
-DEFAULT_PROFILE="claude"                # Profile used without -p
-VERSION="1.1.1"                         # dev-sandbox version
+# Default profile is the first entry in ALL_PROFILES
+VERSION="1.1.2"                         # dev-sandbox version
 
 # Base OS
 BASE_OS="fedora:44"
@@ -1732,6 +1732,41 @@ EOF
 #  Supports both --opt value and --opt=value formats
 # ═══════════════════════════════════════════════════════════════════════
 
+# Pre-scan for --config (must load before profile validation)
+for _arg in "$@"; do
+    case "$_arg" in
+        --config=*) 
+            _cfg="${_arg#*=}"
+            if [[ -f "$_cfg" ]]; then
+                source "$_cfg"
+            else
+                echo "✗ Config file not found: $_cfg" >&2; exit 1
+            fi
+            ;;
+        --config)
+            # Next arg is the path — find it
+            _found_config=false
+            for _next in "$@"; do
+                if [[ "$_found_config" == "true" ]]; then
+                    if [[ -f "$_next" ]]; then
+                        source "$_next"
+                    else
+                        echo "✗ Config file not found: $_next" >&2; exit 1
+                    fi
+                    break
+                fi
+                [[ "$_next" == "--config" ]] && _found_config=true
+            done
+            ;;
+    esac
+done
+
+# Re-derive default profile (config may have changed ALL_PROFILES)
+if [[ ${#ALL_PROFILES[@]} -eq 0 ]]; then
+    echo "✗ ALL_PROFILES is empty — define at least one profile" >&2
+    exit 1
+fi
+DEFAULT_PROFILE="${ALL_PROFILES[0]}"
 PROFILE="${DEFAULT_PROFILE}"
 CONFIG_FILE=""              # --config /path/to/config.sh
 USE_KRUN=true
@@ -1763,19 +1798,11 @@ parse_opt_value() {
 while [[ "${1:-}" == -* ]]; do
     case "${1:-}" in
         --config|--config=*)
+            # Already processed in pre-scan above — skip
             val=""
             if val=$(parse_opt_value "$1"); then shift
             elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
-            else err "Missing config file. Usage: --config <path>"; exit 1; fi
-
-            if [[ ! -f "$val" ]]; then
-                err "Config file not found: $val"
-                exit 1
-            fi
-
-            CONFIG_FILE="$val"
-            # shellcheck source=/dev/null
-            source "$CONFIG_FILE"
+            else shift; fi
             ;;
         --no-krun)
             USE_KRUN=false
@@ -1929,6 +1956,24 @@ fi
 # --allow implicitly sets filtered mode
 if [[ ${#ALLOW_DESTINATIONS[@]} -gt 0 ]] && [[ -z "$NET_MODE" ]]; then
     NET_MODE="filtered"
+fi
+
+# Parameter validation
+if [[ -n "$SSH_PORT_OVERRIDE" ]] && ! [[ "$SSH_PORT_OVERRIDE" =~ ^[0-9]+$ ]]; then
+    err "--ssh-port must be a number: $SSH_PORT_OVERRIDE"
+    exit 1
+fi
+if [[ -n "$RAM_OVERRIDE" ]] && ! [[ "$RAM_OVERRIDE" =~ ^[0-9]+$ ]]; then
+    err "--ram must be a number: $RAM_OVERRIDE"
+    exit 1
+fi
+if [[ -n "$CPUS_OVERRIDE" ]] && ! [[ "$CPUS_OVERRIDE" =~ ^[0-9]+$ ]]; then
+    err "--cpus must be a number: $CPUS_OVERRIDE"
+    exit 1
+fi
+if [[ -n "$PROXY_SHORTCUT" ]] && ! [[ "$PROXY_SHORTCUT" =~ ^[0-9]+$ ]]; then
+    err "--proxy must be a port number: $PROXY_SHORTCUT"
+    exit 1
 fi
 
 # Conflict detection
