@@ -4,28 +4,25 @@
 apply_git_guard_to_profile() {
     local prof="$1"
 
-    # Inconspicuous name for the real git binary
-    local real_git_name="git-bin-8472"
-    local real_git_path="/usr/bin/${real_git_name}"
-
     # 1. ROOT_STARTUP hook (runs as root at container startup)
     local startup_snippet
-    startup_snippet=$(cat <<EOF
-if [ -f /usr/bin/git ] && [ ! -f "${real_git_path}" ]; then
-    mv /usr/bin/git "${real_git_path}"
-    chmod 755 "${real_git_path}"
+    startup_snippet=$(cat <<'EOF'
+# Move the real binary to a dedicated engine folder outside standard PATH
+if [ -f /usr/bin/git ] && [ ! -f /usr/lib/git-engine/git ]; then
+    mkdir -p /usr/lib/git-engine
+    mv /usr/bin/git /usr/lib/git-engine/git
+    chmod 755 /usr/lib/git-engine/git
 fi
 EOF
 )
 
     # 2. Wrapper definition for /usr/bin/git
-    # Single-quoted heredoc ('EOF') ensures NO variable expansion happens during source/eval!
     local wrapper_body
     wrapper_body=$(cat <<'EOF'
 #!/usr/bin/env bash
-REAL_GIT="/usr/bin/git-bin-8472"
+REAL_GIT="/usr/lib/git-engine/git"
 
-# Fallback if the renamed binary does not exist
+# Fallback if engine location does not exist
 [ -x "$REAL_GIT" ] || REAL_GIT="/usr/bin/git"
 
 BLOCKED_SUBCOMMANDS=("push" "branch" "tag" "remote")
@@ -117,17 +114,14 @@ MSG
     done
 fi
 
-# Execute the real git binary directly as current user (without sudo)
+# Execute the real git binary directly as the current user
 exec "$REAL_GIT" "$@"
 EOF
 )
 
-    # Safely assign to profile arrays using namerefs instead of eval
     local startup_ref="PROFILE_${prof}_ROOT_STARTUP"
     local wrappers_ref="PROFILE_${prof}_ROOT_WRAPPERS"
 
     printf -v "$startup_ref" "%s\n%s" "${!startup_ref:-}" "$startup_snippet"
-
-    # Append to the array safely
     eval "${wrappers_ref}+=(\"git|\$wrapper_body\")"
 }
