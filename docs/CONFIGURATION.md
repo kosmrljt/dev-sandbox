@@ -125,14 +125,31 @@ The script searches for config files in this order:
 1. Absolute or relative path (e.g. `--config /home/user/devhw.sh` or `--config ./devhw.sh`)
 2. `~/.dev-sandbox/` directory (e.g. `--config devhw.sh` finds `~/.dev-sandbox/devhw.sh`)
 
-### Example config file
+### Two types of config files
 
-See [configs/devhw.sh](../configs/devhw.sh) — a profile for hardware development with USB devices, camera, GPU, and Wayland desktop sharing.
+**1. Profile configs** — define a new profile with its own agent, packages, and settings:
 
 ```bash
-# Quick usage
-cp configs/devhw.sh ~/.dev-sandbox/
+# configs/devhw.sh — hardware development (USB, camera, Wayland)
 dev-sandbox --config devhw.sh
+```
+
+See [configs/devhw.sh](../configs/devhw.sh) for a complete example.
+
+**2. Policy configs** — modify existing profiles by adding restrictions or capabilities:
+
+```bash
+# configs/_git-guard.sh — restricts git commands across all profiles
+# Blocks: push, tag, branch creation, reset --hard, clean -f
+dev-sandbox --config _git-guard.sh
+```
+
+See [configs/_git-guard.sh](../configs/_git-guard.sh) — uses `ROOT_STARTUP` to relocate the git binary and `ROOT_WRAPPERS` to intercept and filter commands.
+
+Configs are composable — combine a profile with a policy:
+
+```bash
+dev-sandbox --config devhw.sh --config _git-guard.sh
 ```
 
 ### Tips
