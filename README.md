@@ -166,7 +166,9 @@ ALL_PROFILES=(claude research agy vncgui test)
 
 Settings resolve: CLI flag > Profile > Environment > Default.
 
-Profiles can also be defined in external config files — useful for project-specific or machine-specific setups:
+Profiles can also be defined in external config files (`--config`).
+ Two types: configs that **define new profiles** (e.g. hardware development with USB/Wayland) and configs that **modify existing ones** (e.g. restricting git commands like push, tag, branch creation).  Composable with multiple `--config` flags.
+
 
 ```bash
 dev-sandbox --config devhw.sh           # load from ~/.dev-sandbox/
