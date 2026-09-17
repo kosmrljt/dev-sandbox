@@ -173,6 +173,13 @@ dev-sandbox --config devhw.sh           # load from ~/.dev-sandbox/
 dev-sandbox --config ~/configs/work.sh  # load from explicit path
 ```
 
+```bash
+# Install configs from repository
+
+mkdir -p ~/.dev-sandbox
+curl -sL https://github.com/kosmrljt/dev-sandbox/archive/refs/heads/main.tar.gz | tar -xz -C ~/.dev-sandbox --strip-components=2 dev-sandbox-main/configs
+```
+
 Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Known limitations
