@@ -177,8 +177,8 @@ DEFAULT_PODMAN_ARGS=(
 DEFAULT_ROOT_STARTUP=''
 DEFAULT_ROOT_WRAPPERS=()
 DEFAULT_DEV_DOTFILES=(
-    'bashrc.local|# Override PATH — Fedora /etc/profile prepends ~/.local/bin on login
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$HOME/.claude/bin"
+    'bashrc.local|# Load sandbox environment (shared between direct and SSH sessions)
+[ -f /etc/sandbox/env.sh ] && source /etc/sandbox/env.sh
 
 # Colored prompt based on profile
 if [ -n "${SANDBOX_COLOR:-}" ]; then
@@ -920,25 +920,45 @@ PXYEOF
         fi
     fi
 
-    # Build whitelist — extra env + proxy vars (only if set)
-    _whitelist="\${SANDBOX_EXTRA_ENV:-}"
-    for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY SANDBOX_COLOR SANDBOX_PROFILE; do
-        if [ -n "\$(printenv \$_pvar 2>/dev/null)" ]; then
-            if [ -n "\$_whitelist" ]; then
-                _whitelist="\${_whitelist},\${_pvar}"
-            else
-                _whitelist="\${_pvar}"
-            fi
+    # Generate shared environment file (source of truth for all sessions)
+    # Both direct shell and SSH sessions source this via bashrc.local
+    {
+        echo "# Auto-generated on each container start — do not edit"
+        echo "# PATH: ~/.local/bin at end to prevent agent from shadowing system binaries"
+        echo "export PATH=\"\${PATH}\""
+        echo "export CLAUDE_CONFIG_DIR=\"\${CLAUDE_CONFIG_DIR}\""
+        echo "export PYTHONUSERBASE=\"\${PYTHONUSERBASE}\""
+        if [ -n "\${SANDBOX_COLOR:-}" ]; then
+            echo "export SANDBOX_COLOR=\"\${SANDBOX_COLOR}\""
         fi
-    done
+        if [ -n "\${SANDBOX_PROFILE:-}" ]; then
+            echo "export SANDBOX_PROFILE=\"\${SANDBOX_PROFILE}\""
+        fi
+        # Proxy vars only when set
+        for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY; do
+            _val="\$(printenv \$_pvar 2>/dev/null)" || true
+            if [ -n "\$_val" ]; then
+                echo "export \${_pvar}=\"\${_val}\""
+            fi
+        done
+        # Custom env vars from --env / PROFILE_*_ENV
+        if [ -n "\${SANDBOX_EXTRA_ENV:-}" ]; then
+            IFS=',' read -ra _EVARS <<< "\${SANDBOX_EXTRA_ENV}"
+            for _evar in "\${_EVARS[@]}"; do
+                _val="\$(printenv \$_evar 2>/dev/null)" || true
+                if [ -n "\$_val" ]; then
+                    echo "export \${_evar}=\"\${_val}\""
+                fi
+            done
+        fi
+    } > "\${ROOTCONF}/env.sh"
 
-    exec runuser -u "\${U}" --whitelist-environment="\${_whitelist}" -- env \\
+    # Switch to dev user — env.sh is sourced via bashrc.local
+    exec runuser -u "\${U}" -- env \\
         HOME="\${HOME}" \\
         PATH="\${PATH}" \\
         TERM="\${TERM}" \\
-        COLORTERM="\${COLORTERM}" \\
-        CLAUDE_CONFIG_DIR="\${CLAUDE_CONFIG_DIR}" \\
-        PYTHONUSERBASE="\${PYTHONUSERBASE}" \\
+        COLORTERM="\${COLORTERM:-}" \\
         LANG="\${LANG}" \\
         "\$@"
 else
