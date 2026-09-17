@@ -414,6 +414,8 @@ fi
 
 # Podman wrapper with global flags
 pcmd() {
+    #debug only
+    #echo podman "${PODMAN_GLOBAL_FLAGS[@]}" "$@"
     podman "${PODMAN_GLOBAL_FLAGS[@]}" "$@"
 }
 
