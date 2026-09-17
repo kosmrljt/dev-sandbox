@@ -168,15 +168,15 @@ Settings resolve: CLI flag > Profile > Environment > Default.
 
 Profiles can also be defined in external config files (`--config`).
 Two types: 
- * **define new profiles**
- * **modify existing ones** (e.g. restricting git commands like push, tag, branch creation).
+ - **define new profiles**
+ - **modify existing ones** (e.g. restricting git commands like push, tag, branch creation).
 
 ```bash
 dev-sandbox --config devhw.sh           # load from ~/.dev-sandbox/
 dev-sandbox --config ~/configs/work.sh  # load from explicit path
 ```
 
-Install configs from repository
+Hoe to install configs
 
 ```bash
 mkdir -p ~/.dev-sandbox
