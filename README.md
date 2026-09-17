@@ -166,21 +166,22 @@ ALL_PROFILES=(claude research agy vncgui test)
 
 Settings resolve: CLI flag > Profile > Environment > Default.
 
-Profiles can also be defined in external config files (`--config`).
-Two types: 
- - **define new profiles**
- - **modify existing ones** (e.g. restricting git commands like push, tag, branch creation).
+### External config files
+
+Instead of editing the script, profiles and policies can be kept in separate config files loaded with `--config`. Config files can define new profiles (e.g. hardware development with USB and Wayland access) or modify existing ones (e.g. restricting git commands like push, tag, and branch creation). Multiple configs are composable:
 
 ```bash
-dev-sandbox --config devhw.sh           # load from ~/.dev-sandbox/
-dev-sandbox --config ~/configs/work.sh  # load from explicit path
+dev-sandbox --config devhw.sh                          # new profile
+dev-sandbox --config _git-guard.sh                     # policy for all profiles
+dev-sandbox --config devhw.sh --config _git-guard.sh   # combine both
 ```
 
-Hoe to install configs
+Config files are loaded from the current directory or `~/.dev-sandbox/`. Install the included examples:
 
 ```bash
 mkdir -p ~/.dev-sandbox
-curl -sL https://github.com/kosmrljt/dev-sandbox/archive/refs/heads/main.tar.gz | tar -xz -C ~/.dev-sandbox --strip-components=2 dev-sandbox-main/configs
+curl -sL https://github.com/kosmrljt/dev-sandbox/archive/refs/heads/main.tar.gz \
+  | tar -xz -C ~/.dev-sandbox --strip-components=2 dev-sandbox-main/configs
 ```
 
 Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
