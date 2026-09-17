@@ -169,7 +169,7 @@ Settings resolve: CLI flag > Profile > Environment > Default.
 Profiles can also be defined in external config files — useful for project-specific or machine-specific setups:
 
 ```bash
-dev-sandbox --config devhw.sh           # Load from the current directory or ~/.dev-sandbox/
+dev-sandbox --config devhw.sh           # load from ~/.dev-sandbox/
 dev-sandbox --config ~/configs/work.sh  # load from explicit path
 ```
 
