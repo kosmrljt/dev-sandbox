@@ -332,7 +332,7 @@ PROFILE_vncgui_DNF=(
     xfdesktop xfconf xfce4-settings
     xfce4-session xfce4-panel xfwm4 xfce4-terminal thunar mousepad
     dejavu-sans-fonts dejavu-serif-fonts
-    dbus-x11 xorg-x11-xinit
+    dbus-x11 xorg-x11-xinit xclip
     java-latest-openjdk
     firefox
 )
@@ -1777,6 +1777,7 @@ for (( _i=0; _i<${#_args[@]}; _i++ )); do
             _cfg="${_args[$_i]#*=}"
             _resolved=$(_resolve_config "$_cfg")
             if [[ -n "$_resolved" ]]; then
+                echo "Load $_resolved"
                 source "$_resolved"
             else
                 echo "✗ Config file not found: $_cfg" >&2
@@ -1791,8 +1792,9 @@ for (( _i=0; _i<${#_args[@]}; _i++ )); do
             fi
             _resolved=$(_resolve_config "$_cfg")
             if [[ -n "$_resolved" ]]; then
+                echo "Load $_resolved"
                 source "$_resolved"
-                ((_i++))
+                ((_i++)) || true
             else
                 echo "✗ Config file not found: $_cfg" >&2
                 echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
