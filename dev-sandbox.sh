@@ -84,8 +84,8 @@ fi
 # Paths and names
 SANDBOX_BASE="${HOME}/.dev-sandbox"     # Build files location
 BASE_IMAGE_NAME="dev-sandbox-base"      # Base podman image name
-DEFAULT_PROFILE="claude"                # Profile used without -p
-VERSION="1.1.1"                         # dev-sandbox version
+# Default profile is the first entry in ALL_PROFILES
+VERSION="1.1.2"                         # dev-sandbox version
 
 # Base OS
 BASE_OS="fedora:44"
@@ -141,7 +141,8 @@ BASE_DNF_PACKAGES=(
 # ── Base image external tools (binary, not from DNF) ──
 BASE_EXTERNAL_TOOLS=(
     # DuckDB — SQL analytics on local files
-    'curl -L "https://github.com/duckdb/duckdb/releases/latest/download/duckdb_cli-linux-amd64.zip" -o "duckdb.zip"
+    'DUCK_ARCH=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/aarch64/") &&
+     curl -L "https://github.com/duckdb/duckdb/releases/latest/download/duckdb_cli-linux-${DUCK_ARCH}.zip" -o "duckdb.zip"
      && unzip duckdb.zip -d /usr/local/bin && rm duckdb.zip && chmod +x /usr/local/bin/duckdb'
 
     # Bun — fast JS/TS runtime
@@ -176,8 +177,13 @@ DEFAULT_PODMAN_ARGS=(
 DEFAULT_ROOT_STARTUP=''
 DEFAULT_ROOT_WRAPPERS=()
 DEFAULT_DEV_DOTFILES=(
-    'bashrc.local|# Override PATH — Fedora /etc/profile prepends ~/.local/bin on login
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$HOME/.claude/bin"
+    'bashrc.local|# Load sandbox environment (shared between direct and SSH sessions)
+[ -f /etc/sandbox/env.sh ] && source /etc/sandbox/env.sh
+
+# Colored prompt based on profile
+if [ -n "${SANDBOX_COLOR:-}" ]; then
+    PS1="\[\e[${SANDBOX_COLOR}m\][${SANDBOX_PROFILE:-sandbox}]\[\e[0m\] \w\$ "
+fi
 
 # Persistent history (stored in local volume)
 export HISTFILE="$HOME/.local/etc/.bash_history"
@@ -408,6 +414,8 @@ fi
 
 # Podman wrapper with global flags
 pcmd() {
+    #debug only
+    #echo podman "${PODMAN_GLOBAL_FLAGS[@]}" "$@"
     podman "${PODMAN_GLOBAL_FLAGS[@]}" "$@"
 }
 
@@ -493,8 +501,10 @@ check_prereqs() {
             missing=1
         fi
 
-        local ver
-        ver=$(rpm -q --qf '%{VERSION}' libkrun 2>/dev/null || echo "0.0")
+        local ver="0.0"
+        if command -v rpm &>/dev/null && rpm -q libkrun &>/dev/null; then
+            ver=$(rpm -q --qf '%{VERSION}' libkrun 2>/dev/null || echo "0.0")
+        fi
         local major minor
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
@@ -669,23 +679,6 @@ WRAPEOF
 
     local dotfiles=()
     get_profile_array_ref "$profile" DEV_DOTFILES dotfiles
-
-    # Add colored prompt based on profile color
-    local pcolor
-    pcolor=$(get_profile_var "$profile" COLOR)
-    if [[ -n "$pcolor" ]] && [[ "$pcolor" != "0" ]]; then
-        # Prepend PS1 to bashrc.local content
-        local ps1_line="PS1=\"\\[\\\\e[${pcolor}m\\][${profile}]\\[\\\\e[0m\\] \\w\\$ \""
-        local new_dotfiles=()
-        for entry in "${dotfiles[@]}"; do
-            if [[ "${entry%%|*}" == "bashrc.local" ]]; then
-                entry="bashrc.local|${ps1_line}
-${entry#*|}"
-            fi
-            new_dotfiles+=("$entry")
-        done
-        dotfiles=("${new_dotfiles[@]}")
-    fi
 
     local dotfiles_init_block=""
     for entry in "${dotfiles[@]}"; do
@@ -927,19 +920,46 @@ PXYEOF
         fi
     fi
 
-    exec runuser -u "\${U}" --whitelist-environment="\${SANDBOX_EXTRA_ENV:-}" -- env \\
+    # Generate shared environment file (source of truth for all sessions)
+    # Both direct shell and SSH sessions source this via bashrc.local
+    {
+        echo "# Auto-generated on each container start — do not edit"
+        echo "# PATH: ~/.local/bin at end to prevent agent from shadowing system binaries"
+        echo "export PATH=\"\${PATH}\""
+        echo "export CLAUDE_CONFIG_DIR=\"\${CLAUDE_CONFIG_DIR}\""
+        echo "export PYTHONUSERBASE=\"\${PYTHONUSERBASE}\""
+        if [ -n "\${SANDBOX_COLOR:-}" ]; then
+            echo "export SANDBOX_COLOR=\"\${SANDBOX_COLOR}\""
+        fi
+        if [ -n "\${SANDBOX_PROFILE:-}" ]; then
+            echo "export SANDBOX_PROFILE=\"\${SANDBOX_PROFILE}\""
+        fi
+        # Proxy vars only when set
+        for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY; do
+            _val="\$(printenv \$_pvar 2>/dev/null)" || true
+            if [ -n "\$_val" ]; then
+                echo "export \${_pvar}=\"\${_val}\""
+            fi
+        done
+        # Custom env vars from --env / PROFILE_*_ENV
+        if [ -n "\${SANDBOX_EXTRA_ENV:-}" ]; then
+            IFS=',' read -ra _EVARS <<< "\${SANDBOX_EXTRA_ENV}"
+            for _evar in "\${_EVARS[@]}"; do
+                _val="\$(printenv \$_evar 2>/dev/null)" || true
+                if [ -n "\$_val" ]; then
+                    echo "export \${_evar}=\"\${_val}\""
+                fi
+            done
+        fi
+    } > "\${ROOTCONF}/env.sh"
+
+    # Switch to dev user — env.sh is sourced via bashrc.local
+    exec runuser -u "\${U}" -- env \\
         HOME="\${HOME}" \\
         PATH="\${PATH}" \\
         TERM="\${TERM}" \\
-        COLORTERM="\${COLORTERM}" \\
-        CLAUDE_CONFIG_DIR="\${CLAUDE_CONFIG_DIR}" \\
-        PYTHONUSERBASE="\${PYTHONUSERBASE}" \\
+        COLORTERM="\${COLORTERM:-}" \\
         LANG="\${LANG}" \\
-        HTTP_PROXY="\${HTTP_PROXY:-}" \\
-        HTTPS_PROXY="\${HTTPS_PROXY:-}" \\
-        http_proxy="\${http_proxy:-}" \\
-        https_proxy="\${https_proxy:-}" \\
-        NO_PROXY="\${NO_PROXY:-}" \\
         "\$@"
 else
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
@@ -1149,6 +1169,14 @@ do_run() {
     local env_flags=()
     env_flags+=(-e "TERM=xterm-256color")
     env_flags+=(-e "COLORTERM=truecolor")
+    env_flags+=(-e "SANDBOX_PROFILE=${profile}")
+
+    # Profile color for prompt
+    local pcolor
+    pcolor=$(get_profile_var "$profile" COLOR)
+    if [[ -n "$pcolor" ]] && [[ "$pcolor" != "0" ]]; then
+        env_flags+=(-e "SANDBOX_COLOR=${pcolor}")
+    fi
 
     # Generate sudo password on host, send only hash to container
     local sudo_pass
@@ -1335,6 +1363,13 @@ do_run() {
     else
         # Clean up stopped container with same name (if any)
         pcmd rm -f "${container_name}" 2>/dev/null || true
+    fi
+
+    # Note if another container with same profile is running (shared volumes)
+    local other_sessions
+    other_sessions=$(pcmd ps --format "{{.Names}}" 2>/dev/null | grep "^${profile}-" | grep -v "^${container_name}$" || true)
+    if [[ -n "$other_sessions" ]]; then
+        info "Note: another ${profile} session is running (${other_sessions})"
     fi
 
     # Check for port conflicts
@@ -1617,9 +1652,17 @@ do_status() {
     echo ""
     echo "Images:"
     echo -n "  Base:    "
-    pcmd images "${BASE_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1 || echo "not built"
+    if pcmd image exists "${BASE_IMAGE_NAME}" 2>/dev/null; then
+        pcmd images "${BASE_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1
+    else
+        echo "not built"
+    fi
     echo -n "  Profile: "
-    pcmd images "${image_name}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1 || echo "not built"
+    if pcmd image exists "${image_name}" 2>/dev/null; then
+        pcmd images "${image_name}" --format "{{.Repository}}:{{.Tag}}  {{.Size}}" 2>/dev/null | head -n 1
+    else
+        echo "not built"
+    fi
 
     echo ""
     echo "Volumes:"
@@ -1732,6 +1775,59 @@ EOF
 #  Supports both --opt value and --opt=value formats
 # ═══════════════════════════════════════════════════════════════════════
 
+# Pre-scan for --config (must load before profile validation)
+# Config file lookup: absolute/relative path first, then ~/.dev-sandbox/
+_resolve_config() {
+    local cfg="$1"
+    if [[ -f "$cfg" ]]; then
+        echo "$cfg"
+    elif [[ "$cfg" != /* ]] && [[ -f "${SANDBOX_BASE}/${cfg}" ]]; then
+        echo "${SANDBOX_BASE}/${cfg}"
+    else
+        echo ""
+    fi
+}
+
+_args=("$@")
+for (( _i=0; _i<${#_args[@]}; _i++ )); do
+    case "${_args[$_i]}" in
+        --config=*)
+            _cfg="${_args[$_i]#*=}"
+            _resolved=$(_resolve_config "$_cfg")
+            if [[ -n "$_resolved" ]]; then
+                echo "Load $_resolved"
+                source "$_resolved"
+            else
+                echo "✗ Config file not found: $_cfg" >&2
+                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
+                exit 1
+            fi
+            ;;
+        --config)
+            _cfg="${_args[$((_i+1))]:-}"
+            if [[ -z "$_cfg" ]]; then
+                echo "✗ Missing config file path after --config" >&2; exit 1
+            fi
+            _resolved=$(_resolve_config "$_cfg")
+            if [[ -n "$_resolved" ]]; then
+                echo "Load $_resolved"
+                source "$_resolved"
+                ((_i++)) || true
+            else
+                echo "✗ Config file not found: $_cfg" >&2
+                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+# Re-derive default profile (config may have changed ALL_PROFILES)
+if [[ ${#ALL_PROFILES[@]} -eq 0 ]]; then
+    echo "✗ ALL_PROFILES is empty — define at least one profile" >&2
+    exit 1
+fi
+DEFAULT_PROFILE="${ALL_PROFILES[0]}"
 PROFILE="${DEFAULT_PROFILE}"
 CONFIG_FILE=""              # --config /path/to/config.sh
 USE_KRUN=true
@@ -1763,19 +1859,11 @@ parse_opt_value() {
 while [[ "${1:-}" == -* ]]; do
     case "${1:-}" in
         --config|--config=*)
+            # Already processed in pre-scan above — skip
             val=""
             if val=$(parse_opt_value "$1"); then shift
             elif [[ -n "${2:-}" ]]; then val="$2"; shift 2
-            else err "Missing config file. Usage: --config <path>"; exit 1; fi
-
-            if [[ ! -f "$val" ]]; then
-                err "Config file not found: $val"
-                exit 1
-            fi
-
-            CONFIG_FILE="$val"
-            # shellcheck source=/dev/null
-            source "$CONFIG_FILE"
+            else shift; fi
             ;;
         --no-krun)
             USE_KRUN=false
@@ -1929,6 +2017,24 @@ fi
 # --allow implicitly sets filtered mode
 if [[ ${#ALLOW_DESTINATIONS[@]} -gt 0 ]] && [[ -z "$NET_MODE" ]]; then
     NET_MODE="filtered"
+fi
+
+# Parameter validation
+if [[ -n "$SSH_PORT_OVERRIDE" ]] && ! [[ "$SSH_PORT_OVERRIDE" =~ ^[0-9]+$ ]]; then
+    err "--ssh-port must be a number: $SSH_PORT_OVERRIDE"
+    exit 1
+fi
+if [[ -n "$RAM_OVERRIDE" ]] && ! [[ "$RAM_OVERRIDE" =~ ^[0-9]+$ ]]; then
+    err "--ram must be a number: $RAM_OVERRIDE"
+    exit 1
+fi
+if [[ -n "$CPUS_OVERRIDE" ]] && ! [[ "$CPUS_OVERRIDE" =~ ^[0-9]+$ ]]; then
+    err "--cpus must be a number: $CPUS_OVERRIDE"
+    exit 1
+fi
+if [[ -n "$PROXY_SHORTCUT" ]] && ! [[ "$PROXY_SHORTCUT" =~ ^[0-9]+$ ]]; then
+    err "--proxy must be a port number: $PROXY_SHORTCUT"
+    exit 1
 fi
 
 # Conflict detection

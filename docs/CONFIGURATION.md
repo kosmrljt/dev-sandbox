@@ -89,6 +89,59 @@ dev-sandbox -p test build -f
 dev-sandbox -p test
 ```
 
+## External config files
+
+Profiles can be defined in separate config files instead of editing the main script. This keeps the script clean and allows different configurations per project or machine.
+
+### Usage
+
+```bash
+# Load config from explicit path
+dev-sandbox --config ~/my-configs/devhw.sh
+
+# Load config from ~/.dev-sandbox/ (auto-discovered by name)
+cp devhw.sh ~/.dev-sandbox/
+dev-sandbox --config devhw.sh
+
+# Combine with profile selection
+dev-sandbox --config devhw.sh -p devhw
+
+# Multiple config files
+dev-sandbox --config base.sh --config agents.sh
+```
+
+### How it works
+
+Config files are standard bash scripts sourced before argument parsing. They can define:
+- New profiles (`PROFILE_*_*` variables)
+- Override defaults (`DEFAULT_*` variables)
+- Replace the profile registry (`ALL_PROFILES=(...)`)
+
+The first profile in `ALL_PROFILES` becomes the default, so a config that sets `ALL_PROFILES=(devhw)` makes `devhw` the only and default profile.
+
+### Config file lookup
+
+The script searches for config files in this order:
+1. Absolute or relative path (e.g. `--config /home/user/devhw.sh` or `--config ./devhw.sh`)
+2. `~/.dev-sandbox/` directory (e.g. `--config devhw.sh` finds `~/.dev-sandbox/devhw.sh`)
+
+### Example config file
+
+See [configs/devhw.sh](../configs/devhw.sh) — a profile for hardware development with USB devices, camera, GPU, and Wayland desktop sharing.
+
+```bash
+# Quick usage
+cp configs/devhw.sh ~/.dev-sandbox/
+dev-sandbox --config devhw.sh
+```
+
+### Tips
+
+- Config files in `~/.dev-sandbox/` survive `dev-sandbox clean --purge` — only profile scaffolds and volumes are removed
+- Use `ALL_PROFILES=(devhw)` to make the config self-contained — no need for `-p`
+- Use `ALL_PROFILES=(claude devhw research)` to add to existing profiles — first is default
+- `dev-sandbox info` shows resolved settings including config file overrides
+
 ## Full rebuild
 
 After changing base packages:
