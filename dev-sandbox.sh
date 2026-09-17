@@ -180,6 +180,11 @@ DEFAULT_DEV_DOTFILES=(
     'bashrc.local|# Override PATH — Fedora /etc/profile prepends ~/.local/bin on login
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$HOME/.claude/bin"
 
+# Colored prompt based on profile
+if [ -n "${SANDBOX_COLOR:-}" ]; then
+    PS1="\[\e[${SANDBOX_COLOR}m\][${SANDBOX_PROFILE:-sandbox}]\[\e[0m\] \w\$ "
+fi
+
 # Persistent history (stored in local volume)
 export HISTFILE="$HOME/.local/etc/.bash_history"
 export HISTSIZE=10000
@@ -332,7 +337,7 @@ PROFILE_vncgui_DNF=(
     xfdesktop xfconf xfce4-settings
     xfce4-session xfce4-panel xfwm4 xfce4-terminal thunar mousepad
     dejavu-sans-fonts dejavu-serif-fonts
-    dbus-x11 xorg-x11-xinit xclip
+    dbus-x11 xorg-x11-xinit
     java-latest-openjdk
     firefox
 )
@@ -673,23 +678,6 @@ WRAPEOF
     local dotfiles=()
     get_profile_array_ref "$profile" DEV_DOTFILES dotfiles
 
-    # Add colored prompt based on profile color
-    local pcolor
-    pcolor=$(get_profile_var "$profile" COLOR)
-    if [[ -n "$pcolor" ]] && [[ "$pcolor" != "0" ]]; then
-        # Prepend PS1 to bashrc.local content
-        local ps1_line="PS1=\"\\[\\\\e[${pcolor}m\\][${profile}]\\[\\\\e[0m\\] \\w\\$ \""
-        local new_dotfiles=()
-        for entry in "${dotfiles[@]}"; do
-            if [[ "${entry%%|*}" == "bashrc.local" ]]; then
-                entry="bashrc.local|${ps1_line}
-${entry#*|}"
-            fi
-            new_dotfiles+=("$entry")
-        done
-        dotfiles=("${new_dotfiles[@]}")
-    fi
-
     local dotfiles_init_block=""
     for entry in "${dotfiles[@]}"; do
         if [[ -n "$entry" ]]; then
@@ -932,7 +920,7 @@ PXYEOF
 
     # Build whitelist — extra env + proxy vars (only if set)
     _whitelist="\${SANDBOX_EXTRA_ENV:-}"
-    for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY; do
+    for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY SANDBOX_COLOR SANDBOX_PROFILE; do
         if [ -n "\$(printenv \$_pvar 2>/dev/null)" ]; then
             if [ -n "\$_whitelist" ]; then
                 _whitelist="\${_whitelist},\${_pvar}"
@@ -1159,6 +1147,14 @@ do_run() {
     local env_flags=()
     env_flags+=(-e "TERM=xterm-256color")
     env_flags+=(-e "COLORTERM=truecolor")
+    env_flags+=(-e "SANDBOX_PROFILE=${profile}")
+
+    # Profile color for prompt
+    local pcolor
+    pcolor=$(get_profile_var "$profile" COLOR)
+    if [[ -n "$pcolor" ]] && [[ "$pcolor" != "0" ]]; then
+        env_flags+=(-e "SANDBOX_COLOR=${pcolor}")
+    fi
 
     # Generate sudo password on host, send only hash to container
     local sudo_pass
