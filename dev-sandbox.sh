@@ -1347,6 +1347,13 @@ do_run() {
         pcmd rm -f "${container_name}" 2>/dev/null || true
     fi
 
+    # Note if another container with same profile is running (shared volumes)
+    local other_sessions
+    other_sessions=$(pcmd ps --format "{{.Names}}" 2>/dev/null | grep "^${profile}-" | grep -v "^${container_name}$" || true)
+    if [[ -n "$other_sessions" ]]; then
+        info "Note: another ${profile} session is running (${other_sessions})"
+    fi
+
     # Check for port conflicts
     if [[ "$ssh_port" != "0" ]] && [[ -n "$ssh_port" ]]; then
         if ss -tlnp 2>/dev/null | grep -q ":${ssh_port} "; then
