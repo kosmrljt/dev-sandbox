@@ -1,6 +1,6 @@
 # Security Model
 
-dev-sandbox provides host isolation through Podman containers (optionally with krun microVMs) and best-effort network policy through in-VM nftables. For host-level egress control, use a host-side proxy ([urllight](https://github.com/kosmrljt/urllight)) outside the VM.
+dev-sandbox provides host isolation through Podman containers (optionally with krun microVMs) and best-effort network policy through in-VM nftables. For host-level egress control, use a host-side proxy ([sockLight](https://github.com/kosmrljt/socklight)) outside the VM.
 
 ## What is isolated
 
