@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # DEFAULT_* and PROFILE_* vars accessed via indirect refs (${!ref})
+# shellcheck disable=SC1090  # Non-constant source is intentional (--config)
 # ═══════════════════════════════════════════════════════════════════════
 #  dev-sandbox — Sandboxed AI Coding Agents with Podman & krun microVMs
 # ═══════════════════════════════════════════════════════════════════════
@@ -1832,7 +1834,6 @@ if [[ ${#ALL_PROFILES[@]} -eq 0 ]]; then
 fi
 DEFAULT_PROFILE="${ALL_PROFILES[0]}"
 PROFILE="${DEFAULT_PROFILE}"
-CONFIG_FILE=""              # --config /path/to/config.sh
 USE_KRUN=true
 KRUN_CLI_SET=""             # Set to "true" when --krun/--no-krun is used
 TSI_OVERRIDE=false          # --tsi (force TSI networking, skip passt)
