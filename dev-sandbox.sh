@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # DEFAULT_* and PROFILE_* vars accessed via indirect refs (${!ref})
 # shellcheck disable=SC1090  # Non-constant source is intentional (--config)
+# shellcheck disable=SC2054  # Commas in tmpfs mount options are not array separators
 # ═══════════════════════════════════════════════════════════════════════
 #  dev-sandbox — Sandboxed AI Coding Agents with Podman & krun microVMs
 # ═══════════════════════════════════════════════════════════════════════
