@@ -85,7 +85,7 @@ fi
 SANDBOX_BASE="${HOME}/.dev-sandbox"     # Build files location
 BASE_IMAGE_NAME="dev-sandbox-base"      # Base podman image name
 # Default profile is the first entry in ALL_PROFILES
-VERSION="1.1.2"                         # dev-sandbox version
+VERSION="1.1.3"                         # dev-sandbox version
 
 # Base OS
 BASE_OS="fedora:44"
@@ -189,6 +189,9 @@ fi
 export HISTFILE="$HOME/.local/etc/.bash_history"
 export HISTSIZE=10000
 export HISTFILESIZE=20000
+
+# npm global packages in persistent volume (no sudo needed)
+npm config set prefix ~/.local 2>/dev/null
 
 # Aliases
 alias ll="ls -la"
