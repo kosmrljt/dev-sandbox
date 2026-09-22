@@ -164,7 +164,8 @@ dev-sandbox --config devhw.sh --config _git-guard.sh
 After changing base packages:
 
 ```bash
-rm -rf ~/.dev-sandbox
+# Remove scaffolds only (preserves config files in ~/.dev-sandbox/*.sh)
+rm -rf ~/.dev-sandbox/base ~/.dev-sandbox/*/
 dev-sandbox build -f
 ```
 
