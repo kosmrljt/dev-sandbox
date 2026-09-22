@@ -2046,7 +2046,14 @@ if [[ -n "$PROXY_SHORTCUT" ]] && ! [[ "$PROXY_SHORTCUT" =~ ^[0-9]+$ ]]; then
 fi
 
 # Conflict detection
-if [[ "$TSI_OVERRIDE" == "true" ]] && [[ "$NET_MODE" == "locked" || "$NET_MODE" == "filtered" || ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
+# TSI check must account for profile-resolved NET_MODE
+_effective_net="$NET_MODE"
+if [[ -z "$_effective_net" ]]; then
+    _effective_net=$(get_profile_var "$PROFILE" NET_MODE)
+fi
+_effective_net="${_effective_net:-open}"
+
+if [[ "$TSI_OVERRIDE" == "true" ]] && [[ "$_effective_net" == "locked" || "$_effective_net" == "filtered" || ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
     err "--tsi and network restrictions are incompatible"
     err "TSI bypasses nftables — firewall rules have no effect"
     err "Remove --tsi or use --no-krun for working firewall"
