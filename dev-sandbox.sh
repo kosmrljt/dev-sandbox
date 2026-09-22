@@ -354,7 +354,7 @@ PROFILE_vncgui_VOLUMES=(
 )
 PROFILE_vncgui_PODMAN_ARGS=(
     --shm-size 2g
-    -p 5901:5901
+    -p 127.0.0.1:5901:5901
     --tmpfs /var/log:rw,size=50m,mode=1777
     --tmpfs /tmp:rw,size=200m,mode=1777
 )
@@ -931,20 +931,20 @@ PXYEOF
     {
         echo "# Auto-generated on each container start — do not edit"
         echo "# PATH: ~/.local/bin at end to prevent agent from shadowing system binaries"
-        echo "export PATH=\"\${PATH}\""
-        echo "export CLAUDE_CONFIG_DIR=\"\${CLAUDE_CONFIG_DIR}\""
-        echo "export PYTHONUSERBASE=\"\${PYTHONUSERBASE}\""
+        printf 'export PATH=%q\n' "\${PATH}"
+        printf 'export CLAUDE_CONFIG_DIR=%q\n' "\${CLAUDE_CONFIG_DIR}"
+        printf 'export PYTHONUSERBASE=%q\n' "\${PYTHONUSERBASE}"
         if [ -n "\${SANDBOX_COLOR:-}" ]; then
-            echo "export SANDBOX_COLOR=\"\${SANDBOX_COLOR}\""
+            printf 'export SANDBOX_COLOR=%q\n' "\${SANDBOX_COLOR}"
         fi
         if [ -n "\${SANDBOX_PROFILE:-}" ]; then
-            echo "export SANDBOX_PROFILE=\"\${SANDBOX_PROFILE}\""
+            printf 'export SANDBOX_PROFILE=%q\n' "\${SANDBOX_PROFILE}"
         fi
         # Proxy vars only when set
         for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY; do
             _val="\$(printenv \$_pvar 2>/dev/null)" || true
             if [ -n "\$_val" ]; then
-                echo "export \${_pvar}=\"\${_val}\""
+                printf 'export %s=%q\n' "\$_pvar" "\$_val"
             fi
         done
         # Custom env vars from --env / PROFILE_*_ENV
@@ -953,7 +953,7 @@ PXYEOF
             for _evar in "\${_EVARS[@]}"; do
                 _val="\$(printenv \$_evar 2>/dev/null)" || true
                 if [ -n "\$_val" ]; then
-                    echo "export \${_evar}=\"\${_val}\""
+                    printf 'export %s=%q\n' "\$_evar" "\$_val"
                 fi
             done
         fi
@@ -2046,6 +2046,12 @@ if [[ -n "$PROXY_SHORTCUT" ]] && ! [[ "$PROXY_SHORTCUT" =~ ^[0-9]+$ ]]; then
 fi
 
 # Conflict detection
+if [[ "$TSI_OVERRIDE" == "true" ]] && [[ "$NET_MODE" == "locked" || "$NET_MODE" == "filtered" || ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
+    err "--tsi and network restrictions are incompatible"
+    err "TSI bypasses nftables — firewall rules have no effect"
+    err "Remove --tsi or use --no-krun for working firewall"
+    exit 1
+fi
 if [[ "$NET_MODE" == "locked" ]] && [[ ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
     err "--net locked and --allow are mutually exclusive"
     err "Use --net locked (no exceptions) or --allow (with exceptions)"
