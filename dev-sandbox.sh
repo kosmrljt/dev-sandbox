@@ -1102,6 +1102,10 @@ do_run() {
     local vol_flags=()
     for vdir in "${extra_vols[@]}"; do
         if [[ -n "$vdir" ]]; then
+            if [[ "$vdir" == /* || "$vdir" =~ \.\. ]]; then
+                err "Invalid volume path in profile: $vdir"
+                exit 1
+            fi
             local vname="${profile}-sandbox-${vdir#.}"
             vol_flags+=(-v "${vname}:/home/dev/${vdir}")
         fi
