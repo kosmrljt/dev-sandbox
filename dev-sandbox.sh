@@ -175,7 +175,7 @@ DEFAULT_ENV_PASS=()                     # Env vars passed through from host (KEY
 DEFAULT_VOLUMES=(.cache)
 DEFAULT_PODMAN_ARGS=(
     --tmpfs /var/log:rw,size=50m,mode=1777
-    --tmpfs /tmp:rw,size=200m,mode=1777
+    --tmpfs /tmp:rw,size=400m,mode=1777
 )
 DEFAULT_ROOT_STARTUP=''
 DEFAULT_ROOT_WRAPPERS=()
@@ -328,7 +328,7 @@ PROFILE_research_VOLUMES=(
 PROFILE_research_PODMAN_ARGS=(
     --shm-size 2g
     --tmpfs /var/log:rw,size=50m,mode=1777
-    --tmpfs /tmp:rw,size=200m,mode=1777
+    --tmpfs /tmp:rw,size=400m,mode=1777
 )
 
 
@@ -1398,6 +1398,9 @@ do_run() {
     #        eval "exec $fd>&-" 2>/dev/null || true
     #    fi
     #done
+
+    # Ignore Ctrl+Z (SIGTSTP) — prevents accidental suspend of podman run
+    trap '' TSTP
 
     pcmd run --rm -it \
         --name "${container_name}" \
