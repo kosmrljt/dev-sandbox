@@ -182,7 +182,7 @@ for f in "${files[@]}"; do    # iterate array properly
 
 ```bash
 file=""
-[ -f $file ]                  # Error! Becomes [ -f ] which is invalid
+[ -f $file ]                  # Bug! If empty, becomes [ -f ] which returns TRUE (not an error)
 [[ -f $file ]]                # Fine — empty string handled correctly
 ```
 
@@ -1020,7 +1020,7 @@ podman run --rm -it \
     -e COLORTERM=truecolor \
     -e SANDBOX_SUDO_HASH='$6$salt$hash...' \
     -e SANDBOX_SSHD=true \
-    claude-sandbox-krun
+    claude-sandbox-image
 ```
 
 15+ arguments, all conditional, all correct, no quoting issues.
@@ -1052,41 +1052,44 @@ env_flags+=(-e "HTTP_PROXY=http://127.0.0.1:8118")
 podman run "${env_flags[@]}" image
 ```
 
-**Layer 2: Root entrypoint → Dev user**
-`exec runuser -u dev -- env VAR=val` explicitly sets what dev sees. Variables NOT listed here are invisible to dev:
+**Layer 2: Root entrypoint → env.sh → Dev user**
+The entrypoint writes all env vars to `/etc/sandbox/env.sh` using `printf '%q'` for safe serialization. The dev user's `bashrc.local` sources this file:
 
 ```bash
-exec runuser -u "${U}" -- env \
-    HOME="${HOME}" \
-    PATH="${PATH}" \
-    HTTP_PROXY="${HTTP_PROXY:-}" \
-    ${EXTRA_ENV_ARGS} \
-    "$@"
+# Entrypoint generates env.sh (safe serialization)
+{
+    printf 'export PATH=%q\n' "${PATH}"
+    printf 'export CLAUDE_CONFIG_DIR=%q\n' "${CLAUDE_CONFIG_DIR}"
+    # ... proxy vars, custom vars, etc.
+} > "${ROOTCONF}/env.sh"
+
+# Minimal runuser — env.sh handles the rest
+exec runuser -u "${U}" -- env HOME="${HOME}" TERM="${TERM}" LANG="${LANG}" "$@"
 ```
 
-`SANDBOX_SUDO_HASH` is intentionally NOT forwarded — dev user never sees the password hash.
+`bashrc.local` sources env.sh, so both direct shell and SSH sessions get identical environment.
 
-**Layer 3: Custom variables via EXTRA_ENV_ARGS**
-Custom env vars from `--env` and profile `ENV`/`ENV_PASS` are forwarded dynamically:
+`SANDBOX_SUDO_HASH` is intentionally NOT written to env.sh — dev user never sees the password hash.
+
+**Layer 3: Custom variables via env.sh**
+Custom env vars from `--env` and profile `ENV`/`ENV_PASS` are serialized into env.sh:
 
 ```bash
 # Host side (do_run): collect var names
 extra_env_names+=("OLLAMA_HOST")
 env_flags+=(-e "SANDBOX_EXTRA_ENV=OLLAMA_HOST")
 
-# Container side (entrypoint): build passthrough
+# Container side (entrypoint): serialize to env.sh
 if [ -n "${SANDBOX_EXTRA_ENV:-}" ]; then
     IFS=',' read -ra _EVARS <<< "${SANDBOX_EXTRA_ENV}"
     for _evar in "${_EVARS[@]}"; do
-        EXTRA_ENV_ARGS="${EXTRA_ENV_ARGS} ${_evar}=$(printenv ${_evar})"
+        _val="$(printenv $_evar 2>/dev/null)" || true
+        [ -n "$_val" ] && printf 'export %s=%q\n' "$_evar" "$_val"
     done
-fi
-
-# Passed to runuser
-exec runuser ... ${EXTRA_ENV_ARGS} "$@"
+fi >> "${ROOTCONF}/env.sh"
 ```
 
-**Why not just inherit everything?** Security. PID 1 sees `SANDBOX_SUDO_HASH`, `SANDBOX_FIREWALL`, and internal flags. Dev user should only see what's explicitly forwarded. The whitelist approach prevents accidental leaks.
+**Why env.sh?** Single source of truth. Both direct shell and SSH sessions source the same file. No env vars leak that shouldn't — only what's explicitly written to env.sh is visible to the dev user.
 
 ---
 
