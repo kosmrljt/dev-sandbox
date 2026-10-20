@@ -1,0 +1,97 @@
+# decompile.conf — dev-sandbox profile for binary reverse engineering, with a
+# VNC desktop for the Ghidra GUI. FULLY LOCAL: nothing is fetched from GitHub.
+#
+# The scripts ship in ./decompile_src (next to this config). On first use — and
+# automatically after `clean` — this config stages them into the profile's build
+# context at ~/.dev-sandbox/decompile/ctx/, but ONLY if that ctx/ doesn't already
+# exist. So normal sessions copy nothing, and there's no manual step.
+#
+# The patched generator COPYs ctx/ into the image (see PATCH.md). Because ctx is
+# a build layer, changing it forces a rebuild; leaving it alone is a cache hit.
+#
+# To refresh after editing ./decompile_src:  rm -rf ~/.dev-sandbox/decompile/ctx
+# (the next run re-stages, which changes ctx and triggers a rebuild).
+#
+# Layout:
+#   <dir>/
+#     decompile.conf
+#     decompile_src/          <- source of truth (survives `clean`)
+#       setup-root.sh
+#       scripts/  (decompile-init, ghidra-mcp-up, td32-import, exportjson.sh, ...)
+#       docs/  vendor/
+#
+# The RE toolchain (Ghidra, radare2, ilspycmd, the wrappers, the GhidraMCP
+# bridge) installs into the IMAGE, so a rebuild refreshes it. Claude Code is the
+# exception: it installs per-user into ~/.local so it can self-update without a
+# rebuild. Volumes keep user state (Claude login, caches, XFCE/VNC config).
+#
+# Use:    dev-sandbox --config decompile.sh
+# Connect: VNC client -> 127.0.0.1:5901 (password $SANDBOX_VNC_PASS, default "sandbox").
+
+# --- Auto-stage into ctx/ only when it's missing (first run / after clean) -----
+_CONF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_CTX="${SANDBOX_BASE:-$HOME/.dev-sandbox}/decompile/ctx"
+if [[ ! -d "$_CTX" && -d "${_CONF_DIR}/decompile_src" ]]; then
+    mkdir -p "$_CTX"
+    cp -a "${_CONF_DIR}/decompile_src/." "$_CTX/"
+fi
+
+PROFILE_decompile_DESCRIPTION="RE sandbox — Ghidra via VNC, radare2, ilspycmd, python decompilers + Claude Code"
+PROFILE_decompile_COLOR="35"
+PROFILE_decompile_USE_KRUN=false
+PROFILE_decompile_SSH_PORT=2232
+
+PROFILE_decompile_DNF=(
+    tigervnc-server
+    xfwm4 xfce4-session xfce4-panel xfce4-terminal xfdesktop xfconf xfce4-settings thunar
+    dbus-x11 xorg-x11-xinit
+    dejavu-sans-fonts dejavu-serif-fonts fontconfig
+    gdk-pixbuf2 shared-mime-info
+    gtk-update-icon-cache desktop-file-utils hicolor-icon-theme adwaita-icon-theme
+    geany
+    file binutils radare2 binwalk perl-Image-ExifTool
+    maven
+    libicu
+    ffmpeg-free tesseract tesseract-langpack-fra
+    libxkbcommon mesa-libGL mesa-libEGL libglvnd-opengl
+)
+
+# ROOT stage (before USER dev) — installs the RE toolchain into the image, so a
+# rebuild refreshes it. Nothing is written to ~/.local at build.
+PROFILE_decompile_TOOLS=(
+    "bash /opt/ctx/setup-root.sh"
+)
+
+# DEV stage (as dev) — Claude Code via its native installer into ~/.local/bin.
+PROFILE_decompile_AGENTS=(
+    "curl -fsSL https://claude.ai/install.sh | bash"
+)
+
+PROFILE_decompile_ENV=(
+    "DISPLAY=:1"
+    "GHIDRA_HOME=/opt/ghidra"
+    "GHIDRA_INSTALL_DIR=/opt/ghidra"
+    "JAVA_HOME=/opt/jdk21"
+    "JAVA_HOME_OVERRIDE=/opt/jdk21"
+    "DOTNET_ROOT=/opt/dotnet"
+    "DOTNET_ROLL_FORWARD=Major"
+    "DOTNET_CLI_TELEMETRY_OPTOUT=1"
+)
+
+PROFILE_decompile_VOLUMES=(
+    .claude
+    .cache
+    .config
+    .vnc
+)
+
+PROFILE_decompile_PODMAN_ARGS=(
+    --shm-size 2g
+    -p 127.0.0.1:5901:5901
+    --tmpfs /var/log:rw,size=50m,mode=1777
+)
+
+PROFILE_decompile_ROOT_STARTUP="${PROFILE_vncgui_ROOT_STARTUP}"
+
+# Register — append so claude/agy/research/vncgui stay intact.
+ALL_PROFILES=(decompile)

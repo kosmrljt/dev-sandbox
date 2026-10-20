@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# ghidra-mcp-up - bring the Ghidra MCP server up and prove it works.
+#
+# What it does, in order:
+#   1. Launches Ghidra (via ghidra-bg). Ghidra restores its last session, so the
+#      project and program you had open come back on their own.
+#   2. Waits until the GhidraMCP HTTP server answers. That server lives inside
+#      the GUI plugin and only runs once a program is open in a CodeBrowser, so
+#      a successful reply also confirms the project actually reopened.
+#   3. Runs a few READ-ONLY requests as a smoke test and prints the results.
+#
+# It never calls a mutating tool. The write-side tools (create_struct, rename_*,
+# apply_data_type, save_program, ...) are driven from Claude Code, where they go
+# through the permission prompts set in .claude/settings.json.
+#
+# Usage:  ghidra-mcp-up [timeout_seconds]      # default 120
+# Env:    GHIDRA_MCP_PORT                       # plugin HTTP port, default 8089
+
+set -euo pipefail
+
+PORT="${GHIDRA_MCP_PORT:-8089}"
+BASE="http://127.0.0.1:${PORT}"
+TIMEOUT="${1:-120}"
+
+echo "== Starting Ghidra (restores the last project/program) =="
+ghidra-bg start
+
+echo "== Waiting for the GhidraMCP server on ${BASE} (up to ${TIMEOUT}s) =="
+deadline=$(( $(date +%s) + TIMEOUT ))
+until curl -fsS "${BASE}/check_connection" >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "TIMEOUT: nothing answered on ${BASE}." >&2
+        echo "Make sure a program is open in a CodeBrowser and that the" >&2
+        echo "GhidraMCP plugin is enabled (File > Configure)." >&2
+        exit 1
+    fi
+    sleep 3
+done
+
+echo "== Smoke test (read-only) =="
+printf '  check_connection : '; curl -fsS "${BASE}/check_connection"; echo
+printf '  metadata         : '; curl -fsS "${BASE}/get_metadata" 2>/dev/null | head -n 3 || true
+echo   '  functions (3)    :'
+curl -fsS "${BASE}/list_functions?limit=3" 2>/dev/null | sed 's/^/    /' || true
+
+echo
+echo "== GhidraMCP is up on ${BASE} =="
+echo "Next: run 'claude' in the project dir, then /mcp (ghidra should be connected)."
+echo "The multi-instance tool 'list_instances' lives in the bridge and shows up there."
