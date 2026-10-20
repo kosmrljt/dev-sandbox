@@ -1,14 +1,7 @@
 # decompile.conf — dev-sandbox profile for binary reverse engineering, with a
 # VNC desktop for the Ghidra GUI. FULLY LOCAL: nothing is fetched from GitHub.
 #
-# The scripts ship in ./decompile_src (next to this config). On first use — and
-# automatically after `clean` — this config stages them into the profile's build
-# context at ~/.dev-sandbox/decompile/ctx/, but ONLY if that ctx/ doesn't already
-# exist. So normal sessions copy nothing, and there's no manual step.
-#
-# The patched generator COPYs ctx/ into the image (see PATCH.md). Because ctx is
-# a build layer, changing it forces a rebuild; leaving it alone is a cache hit.
-#
+# The scripts ship in ./decompile_src (next to this config). 
 # To refresh after editing ./decompile_src:  rm -rf ~/.dev-sandbox/decompile/ctx
 # (the next run re-stages, which changes ctx and triggers a rebuild).
 #
@@ -19,11 +12,6 @@
 #       setup-root.sh
 #       scripts/  (decompile-init, ghidra-mcp-up, td32-import, exportjson.sh, ...)
 #       docs/  vendor/
-#
-# The RE toolchain (Ghidra, radare2, ilspycmd, the wrappers, the GhidraMCP
-# bridge) installs into the IMAGE, so a rebuild refreshes it. Claude Code is the
-# exception: it installs per-user into ~/.local so it can self-update without a
-# rebuild. Volumes keep user state (Claude login, caches, XFCE/VNC config).
 #
 # Use:    dev-sandbox --config decompile.sh
 # Connect: VNC client -> 127.0.0.1:5901 (password $SANDBOX_VNC_PASS, default "sandbox").
