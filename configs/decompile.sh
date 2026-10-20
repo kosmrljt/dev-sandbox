@@ -1,5 +1,5 @@
-# decompile.conf — dev-sandbox profile for binary reverse engineering, with a
-# VNC desktop for the Ghidra GUI. FULLY LOCAL: nothing is fetched from GitHub.
+# decompile.sh — dev-sandbox profile for binary reverse engineering, with a
+# VNC desktop for the Ghidra GUI.
 #
 # The scripts ship in ./decompile_src (next to this config). 
 # To refresh after editing ./decompile_src:  rm -rf ~/.dev-sandbox/decompile/ctx
