@@ -34,7 +34,7 @@ sudo dnf install podman crun-krun
 sudo apt install podman crun
 
 # Install
-curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
+curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/dev-1.1.3/dev-sandbox.sh
 chmod +x ~/.local/bin/dev-sandbox
 
 # Run from your project directory
