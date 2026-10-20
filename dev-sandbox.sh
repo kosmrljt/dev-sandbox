@@ -363,38 +363,97 @@ PROFILE_vncgui_ENV=(
     "DISPLAY=:1"
 )
 PROFILE_vncgui_ROOT_STARTUP='
-# Set VNC password on first run
+U=dev
+
+# 1. Prepare X11 socket directory as root (fixes _XSERVTransmkdir error and window opening issues)
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+mkdir -p /tmp/.X11-unix /var/run/dbus
+chmod 1777 /tmp/.X11-unix
+
+# Start system D-Bus if available so desktop apps and Thunar do not hang waiting for it
+if command -v dbus-daemon >/dev/null 2>&1; then
+    dbus-uuidgen --ensure 2>/dev/null || true
+    dbus-daemon --system --fork 2>/dev/null || true
+fi
+
+# 2. Setup user directories
+mkdir -p "/home/${U}/.vnc"
+mkdir -p "/home/${U}/.config/xfce4/xfconf/xfce-perchannel-xml"
+mkdir -p "/home/${U}/.config/autostart"
+
+# Generate VNC password file if it does not exist yet
 if [ ! -f "/home/${U}/.vnc/passwd" ]; then
-    mkdir -p "/home/${U}/.vnc"
     echo "${SANDBOX_VNC_PASS:-sandbox}" | vncpasswd -f > "/home/${U}/.vnc/passwd"
     chmod 600 "/home/${U}/.vnc/passwd"
-    echo "▶ VNC password set (default: sandbox)"
 fi
 
-# Create xstartup for XFCE (without systemd)
-if [ ! -f "/home/${U}/.vnc/xstartup" ]; then
-    {
-        echo "#!/bin/bash"
-        echo "unset SESSION_MANAGER"
-        echo "unset DBUS_SESSION_BUS_ADDRESS"
-        echo "export XDG_SESSION_TYPE=x11"
-        echo "eval \$(dbus-launch --sh-syntax)"
-        echo "xfwm4 &"
-        echo "xfdesktop &"
-        echo "xfce4-panel &"
-        echo "thunar --daemon &"
-        echo "wait"
-    } > "/home/${U}/.vnc/xstartup"
-    chmod +x "/home/${U}/.vnc/xstartup"
+# 3. Disable compositing and enable outline dragging/resizing directly via XML
+# Note: Using <<"XML" instead of single quotes so we do not break the outer single-quoted variable!
+cat > "/home/${U}/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" <<"XML"
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="use_compositing" type="bool" value="false"/>
+    <property name="box_move" type="bool" value="true"/>
+    <property name="box_resize" type="bool" value="true"/>
+  </property>
+</channel>
+XML
+
+# 4. Prevent PolicyKit agents from autostarting
+cat > "/home/${U}/.config/autostart/xfce-polkit.desktop" <<"AUTOSTART"
+[Desktop Entry]
+Hidden=true
+AUTOSTART
+
+# 5. Create the VNC xstartup script
+# Note: Using <<"XSTARTUP" and escaping \$ so variables evaluate at VNC runtime as user dev, NOT now as root!
+cat > "/home/${U}/.vnc/xstartup" <<"XSTARTUP"
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+export DISPLAY=:1
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+# Start an isolated D-Bus session bus for the VNC user
+if command -v dbus-launch >/dev/null 2>&1; then
+    eval $(dbus-launch --sh-syntax)
+    export DBUS_SESSION_BUS_ADDRESS
+    export DBUS_SESSION_BUS_PID
 fi
 
-chown -R "${U}:${U}" "/home/${U}/.vnc"
+# 1st: Start window manager first and wait briefly so it registers _NET_WORKAREA
+xfwm4 --compositor=off --sm-client-disable &
+sleep 1
 
-# Start VNC server
-su - "${U}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>/dev/null || true
-echo "▶ VNC server started on :5901"
+# 2nd: Start settings daemon
+xfsettingsd --replace --sm-client-disable &
+
+# 3rd: Start desktop and panel after window manager is ready
+xfdesktop --sm-client-disable &
+xfce4-panel --sm-client-disable &
+thunar --daemon &
+
+# Keep xstartup running
+wait
+XSTARTUP
+
+# Pre-create .Xauthority so xauth does not complain that the file is missing
+touch "/home/${U}/.Xauthority"
+
+# Set executable permissions and fix ownership (including .Xauthority)
+chmod +x "/home/${U}/.vnc/xstartup"
+chown -R "${U}:${U}" "/home/${U}/.vnc" "/home/${U}/.config" "/home/${U}/.Xauthority"
+
+# Launch TigerVNC and silence the deprecated wrapper warning + stdout noise
+su - "${U}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no >/dev/null 2>&1"
+echo "VNC server started on :5901 (connect 127.0.0.1:5901)"
+
 '
-
 
 # ─── Profile registry ─────────────────────────────────────────────────
 ALL_PROFILES=(claude agy research vncgui)
@@ -606,6 +665,11 @@ generate_profile_dockerfile() {
     local phome
     phome=$(profile_home "$profile")
 
+    local ctx_copy=""
+    if [[ -d "${phome}/ctx" ]]; then
+        ctx_copy="COPY ctx /opt/ctx"
+    fi
+
     local extra_dnf=()
     get_profile_array_ref "$profile" DNF extra_dnf
     local dnf_line=""
@@ -641,6 +705,8 @@ generate_profile_dockerfile() {
 
     cat > "${phome}/Dockerfile" << DEOF
 FROM ${BASE_IMAGE_NAME}:latest
+
+${ctx_copy}
 
 ${dnf_line}
 
