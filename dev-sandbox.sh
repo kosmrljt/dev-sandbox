@@ -1130,6 +1130,7 @@ do_build() {
 do_run() {
     local profile="$1"
     shift
+    local -a HOOK_PODMAN_ARGS=()      # pre-run hooks append dynamic podman flags here
 
     local image_name
     image_name=$(profile_image "$profile")
@@ -1469,6 +1470,16 @@ do_run() {
     #    fi
     #done
 
+    # Register teardown before the pre-run hooks, so post-run hooks still fire
+    # if a pre-run hook aborts. (After the early exits above → no empty teardown.)
+    trap '_sandbox_teardown' EXIT
+    local _h
+    for _h in "${PRE_RUN_HOOKS[@]}"; do
+        [[ -n "$_h" ]] || continue
+        declare -F "$_h" >/dev/null || continue
+        "$_h" "$profile"
+    done
+
     # Ignore Ctrl+Z (SIGTSTP) — prevents accidental suspend of podman run
     trap '' TSTP
 
@@ -1489,6 +1500,7 @@ do_run() {
         "${vol_flags[@]}" \
         -w "${mount_point}" \
         "${env_flags[@]}" \
+        "${HOOK_PODMAN_ARGS[@]}" \
         "${image_name}" \
         "$@" \
     || true
@@ -1855,16 +1867,59 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════
 
 # Pre-scan for --config (must load before profile validation)
-# Config file lookup: absolute/relative path first, then ~/.dev-sandbox/
+# Config file lookup: the name as given, then with .sh / .conf appended; each
+# tried in the current directory first, then in ~/.dev-sandbox/ (SANDBOX_BASE).
+# So `--config run_proxy` finds ./run_proxy.sh or ~/.dev-sandbox/run_proxy.conf.
 _resolve_config() {
-    local cfg="$1"
-    if [[ -f "$cfg" ]]; then
-        echo "$cfg"
-    elif [[ "$cfg" != /* ]] && [[ -f "${SANDBOX_BASE}/${cfg}" ]]; then
-        echo "${SANDBOX_BASE}/${cfg}"
-    else
-        echo ""
-    fi
+    local cfg="$1" base c
+    for base in "" "${SANDBOX_BASE}/"; do
+        [[ -n "$base" && "$cfg" == /* ]] && continue   # SANDBOX_BASE only for relative names
+        for c in "$cfg" "$cfg.sh" "$cfg.conf"; do
+            if [[ -f "${base}${c}" ]]; then
+                echo "${base}${c}"
+                return 0
+            fi
+        done
+    done
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Run hooks — pre/post-run extension points
+#
+#  A --config file registers hook functions by name:
+#     PRE_RUN_HOOKS+=(my_pre)    # runs just before `pcmd run`, $1 = profile
+#     POST_RUN_HOOKS+=(my_post)  # runs after the container exits (also on Ctrl-C)
+#
+#  A pre-run hook may append podman flags to HOOK_PODMAN_ARGS (global + dynamic,
+#  spliced into `pcmd run` before the image name — unlike the static per-profile
+#  PROFILE_<p>_PODMAN_ARGS). A pre-run error aborts the run; a post-run error is
+#  only reported and the rest still run.
+#
+#  Usage example — copy into a --config file and uncomment:
+#     _my_pre() {                                           # $1 = profile
+#         _MY_DIR=$(mktemp -d)                              # set something up
+#         HOOK_PODMAN_ARGS+=(-v "${_MY_DIR}:/run/sandbox")  # expose it (optional)
+#         echo "> start"
+#     }
+#     _my_post() {                                          # tear the same down
+#         rm -rf "${_MY_DIR:-/nonexistent}"
+#         echo "> end"
+#     }
+#     PRE_RUN_HOOKS+=(_my_pre)
+#     POST_RUN_HOOKS+=(_my_post)
+# ═══════════════════════════════════════════════════════════════════════
+declare -ga PRE_RUN_HOOKS=()
+declare -ga POST_RUN_HOOKS=()
+
+# Runs every registered post-run hook; one failing hook does not stop the rest.
+_sandbox_teardown() {
+    local _h
+    for _h in "${POST_RUN_HOOKS[@]}"; do
+        [[ -n "$_h" ]] || continue
+        declare -F "$_h" >/dev/null || continue
+        "$_h" || warn "run hook '$_h' failed"
+    done
 }
 
 _args=("$@")
@@ -1878,7 +1933,7 @@ for (( _i=0; _i<${#_args[@]}; _i++ )); do
                 source "$_resolved"
             else
                 echo "✗ Config file not found: $_cfg" >&2
-                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
+                echo "  Searched $_cfg (and .sh/.conf) in $(pwd) and ${SANDBOX_BASE}" >&2
                 exit 1
             fi
             ;;
@@ -1894,7 +1949,7 @@ for (( _i=0; _i<${#_args[@]}; _i++ )); do
                 ((_i++)) || true
             else
                 echo "✗ Config file not found: $_cfg" >&2
-                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
+                echo "  Searched $_cfg (and .sh/.conf) in $(pwd) and ${SANDBOX_BASE}" >&2
                 exit 1
             fi
             ;;
