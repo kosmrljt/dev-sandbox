@@ -64,6 +64,8 @@ Once inside, you are in an isolated container:
 - Type `exit` to leave
 
 
+> **Note (2026-10-25):** After a recent Fedora update, krun's passt networking broke
+> (`start passt` error) due to a crun-krun ↔ passt version mismatch. Workaround: `sudo dnf downgrade passt` — or run with `--tsi`.
 
 ## Profiles
 
