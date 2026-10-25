@@ -1,9 +1,8 @@
 # Configuration
 
-All configuration lives in `dev-sandbox.sh` itself. Common settings and sensible
-defaults apply to every profile; a profile overrides only what differs from those
-defaults. External files loaded with `--config` can add profiles or behavior without
-touching the script.
+All configuration lives in `dev-sandbox.sh`. Common settings and sensible defaults
+apply to every profile; a profile overrides only what differs. External files loaded
+with `--config` can add profiles or layer behavior without touching the script.
 
 - [Priority chain](#priority-chain)
 - [Build model](#build-model)
@@ -26,10 +25,17 @@ For any setting, the first source that provides a value wins:
 CLI flag  >  PROFILE_<profile>_<VAR>  >  environment variable  >  DEFAULT_<VAR>
 ```
 
-So `--ram 8192` beats a profile's `PROFILE_x_RAM`, which beats `DEV_SANDBOX_RAM`,
-which beats `DEFAULT_RAM`. Variables are resolved per run, so changing a runtime
-setting takes effect on the next `dev-sandbox` with no rebuild (see
-[Rebuilding](#rebuilding) for the settings that do need one).
+Worked example for RAM (each line is the result when that is the highest source set):
+
+```
+dev-sandbox --ram 8192        → 8192    (CLI flag wins over everything)
+PROFILE_<p>_RAM=6144          → 6144    (profile, when no flag)
+DEV_SANDBOX_RAM=16384         → 16384   (environment, feeds DEFAULT_RAM)
+(nothing set)                 → 4096    (DEFAULT_RAM)
+```
+
+Settings are resolved per run, so changing a runtime one takes effect on the next
+`dev-sandbox` with no rebuild. See [Rebuilding](#rebuilding) for the ones that don't.
 
 ---
 
@@ -45,8 +51,8 @@ setting takes effect on the next `dev-sandbox` with no rebuild (see
   entrypoint.
 
 At container start the entrypoint runs first as **root** — it writes wrappers,
-`startup.sh` and dotfiles into the volumes (only if they don't exist yet), sets up
-SSH/Privoxy/firewall — and then switches to **dev** for your session. Your project
+`startup.sh` and dotfiles into the volumes (only if they don't exist yet), and sets up
+SSH/Privoxy/firewall — then switches to **dev** for your session. Your project
 directory is bind-mounted, and because `dev` shares your host UID, files there are
 yours without any `chmod`.
 
@@ -60,7 +66,7 @@ Who applies each variable, and where it ends up:
 | `DEV_DOTFILES` | container start | root (chown dev) | `~/.local/etc` (local volume), written only if absent |
 | everything else | container start | — | `podman run` flags / container env (nothing stored) |
 
-Two consequences that trip people up (both covered in [Rebuilding](#rebuilding)):
+Two consequences that trip people up (both handled in [Rebuilding](#rebuilding)):
 
 - `AGENTS` install into volume-mounted paths (`~/.local`, `~/.claude`), so the first
   run seeds the volume from the image; afterwards the **volume wins**. Updating an
@@ -74,7 +80,7 @@ Two consequences that trip people up (both covered in [Rebuilding](#rebuilding))
 ## Profile variables
 
 Every setting follows the `DEFAULT_<NAME>` / `PROFILE_<profile>_<NAME>` pattern: set
-`DEFAULT_<NAME>` to change it for all profiles, or `PROFILE_<profile>_<NAME>` for one.
+`DEFAULT_<NAME>` to change it everywhere, or `PROFILE_<profile>_<NAME>` for one profile.
 
 **Runtime & isolation**
 
@@ -83,14 +89,14 @@ Every setting follows the `DEFAULT_<NAME>` / `PROFILE_<profile>_<NAME>` pattern:
 | `USE_KRUN` | `true` | krun microVM (stronger isolation) vs. a standard container (`false`; needed for device passthrough, GUI, SSH port mapping). |
 | `RAM` | `4096` | Memory in MiB. A hard VM limit under krun, otherwise `--memory`. |
 | `CPUS` | *(empty)* | CPU cores. Empty = no limit (krun uses `nproc`). |
-| `COLOR` | `0` | ANSI prompt color (`32` green, `31` red, …). Marks trusted vs. untrusted profiles at a glance. |
-| `DESCRIPTION` | — | Shown by `profiles` / `status`. |
+| `COLOR` | `0` | ANSI prompt color (`32` green, `31` red, `33` yellow, `34` blue, `35` magenta). Marks trusted vs. untrusted profiles at a glance. |
+| `DESCRIPTION` | — | Shown by `profiles` / `status` / `info`. |
 
 **Network**
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NET_MODE` | `open` | `open`, `locked` (loopback only), or `filtered` (allow-list, set via `--allow`). |
+| `NET_MODE` | `open` | `open`, `locked` (loopback only), or `filtered` (allow-list via `--allow`). |
 | `RUN_PRIVOXY` | `false` | Run Privoxy (HTTP → SOCKS5) on `:8118`. |
 | `PRIVOXY_SOCKS` | `host.containers.internal:1080` | Upstream SOCKS for Privoxy. |
 
@@ -99,14 +105,14 @@ Every setting follows the `DEFAULT_<NAME>` / `PROFILE_<profile>_<NAME>` pattern:
 | Variable | Default | Purpose |
 |---|---|---|
 | `SSH_PORT` | `0` | `0` = no SSH. A port opens sshd on `127.0.0.1:<port>`. (Under krun, SSH port mapping and the firewall are mutually exclusive — see the script's notes.) |
-| `SSH_KEY` | *(empty)* | Public key for passwordless SSH (only with `SSH_PORT` > 0). |
+| `SSH_KEY` | *(empty)* | Public key for passwordless SSH, e.g. `~/.ssh/id_ed25519.pub` (only with `SSH_PORT` > 0). |
 
 **Environment**
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ENV` | `()` | Variables set inside the container, as `KEY=VALUE` (values live in the config). |
-| `ENV_PASS` | `()` | Variables passed through **from the host**, as `KEY` only (keeps secrets out of the script). |
+| `ENV_PASS` | `()` | Variables forwarded **from the host**, as `KEY` only (keeps secrets out of the script). |
 
 **Storage**
 
@@ -115,24 +121,24 @@ Every setting follows the `DEFAULT_<NAME>` / `PROFILE_<profile>_<NAME>` pattern:
 | `VOLUMES` | `(.cache)` | Which `~/.<name>` dirs are persistent named volumes. Credentials, caches and settings go here. |
 | `PODMAN_ARGS` | tmpfs for `/var/log`, `/tmp` | Raw `podman run` flags (tmpfs, `-p`, `--device`, `--shm-size`). Static — resolved when the profile is read. For run-time/dynamic flags, see [Run hooks](#run-hooks-prepost-run). |
 
-**Build (baked into the image — needs a rebuild)**
+**Build — baked into the image (needs a rebuild)**
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DNF` | `()` | Extra dnf packages for this profile (installed as root). |
 | `TOOLS` | `()` | Arbitrary root install commands at build time (e.g. `bash /opt/ctx/setup-root.sh`). |
-| `AGENTS` | `()` | Agent install commands, run as `dev` (e.g. the Claude installer). |
+| `AGENTS` | `()` | Agent install commands, run as `dev` (e.g. `curl … | bash`). |
 
-**In-container behavior (written to a volume on first start)**
+**In-container behavior — written to a volume on first start**
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ROOT_STARTUP` | `''` | Bash sourced as root on every start (the file is written once, to `/etc/sandbox/startup.sh`). Use for root-level setup: restoring config, preparing dirs, launching services. |
+| `ROOT_STARTUP` | `''` | Bash sourced as root on every start (file written once, to `/etc/sandbox/startup.sh`). For root-level setup: restoring config, preparing dirs, launching services. |
 | `ROOT_WRAPPERS` | `()` | `name\|body` entries → `/usr/local/bin/<name>` wrapper commands (e.g. the `claude` launcher). Early on `PATH`. |
 | `DEV_DOTFILES` | `bashrc.local`, `tmux.conf` | `name\|body` entries → `~/.local/etc/<name>`, loaded into each dev session. |
 
-The profile registry is the array `ALL_PROFILES=(…)`; its first entry is the default
-profile. Built-in profiles: `claude`, `agy`, `research`, `vncgui`.
+The profile registry is `ALL_PROFILES=(…)`; its first entry is the default profile.
+Built-in profiles: `claude`, `agy`, `research`, `vncgui`.
 
 ---
 
@@ -141,12 +147,12 @@ profile. Built-in profiles: `claude`, `agy`, `research`, `vncgui`.
 A few settings can be changed for a single run without editing the script:
 
 ```bash
-DEV_SANDBOX_RAM=8192 dev-sandbox            # memory (MiB)
-DEV_SANDBOX_CPUS=8   dev-sandbox            # CPU cores
-DEV_SANDBOX_STORAGE=/mnt/disk2/podman dev-sandbox   # podman storage root
+DEV_SANDBOX_RAM=8192 dev-sandbox                    # memory (MiB)
+DEV_SANDBOX_CPUS=8   dev-sandbox                    # CPU cores
+DEV_SANDBOX_STORAGE="/mnt/disk2/podman" dev-sandbox # podman storage root
 ```
 
-For arbitrary variables inside the container, use the CLI rather than the script:
+For arbitrary variables inside the container, use the CLI:
 
 ```bash
 dev-sandbox --env KEY=VALUE                 # set a value
@@ -160,32 +166,44 @@ dev-sandbox --env KEY                        # forward KEY from the host
 | Data | Where | Persists? |
 |---|---|---|
 | Project files | bind mount `/app/<dir>` ↔ your working directory | yes, on the host |
-| pip/npm globals, dotfiles (`~/.local/etc`), bash history, seeded agent binaries | `<profile>-sandbox-local` volume → `~/.local` | yes |
+| pip/npm globals, scripts, dotfiles (`~/.local/etc`), bash history, seeded agent binaries | `<profile>-sandbox-local` volume → `~/.local` | yes |
 | SSH host keys, `startup.sh`, wrappers, Privoxy config, generated `env.sh`, config backup | `<profile>-sandbox-rootconf` volume → `/etc/sandbox` | yes |
-| Agent credentials, caches, settings (`.claude`, `.cache`, …) | `<profile>-sandbox-<name>` volumes → `~/.<name>` | yes |
+| Agent credentials, caches, settings (`.claude`, `.gemini`, `.cache`, …) | `<profile>-sandbox-<name>` volumes → `~/.<name>` | yes |
 | System (dnf) packages | the image | only by editing the profile and rebuilding |
 | Anything else outside `/app` and the mounted `~/…` paths | — | lost on exit (`--rm`) |
+
+`env.sh` is regenerated on every start, so it always reflects the current `ENV` /
+proxy / color settings.
 
 ---
 
 ## Adding a new profile
 
-Minimal profile — just a description and an agent:
+Minimal profile — a description and an agent:
 
 ```bash
-PROFILE_coder_DESCRIPTION="My coding agent"
-PROFILE_coder_AGENTS=(
-    'curl -fsSL https://example.com/install.sh | bash'
-)
+PROFILE_test_DESCRIPTION="My test sandbox"
+PROFILE_test_AGENTS=('pip install --user aider-chat')
 
-ALL_PROFILES=(claude agy research vncgui coder)   # register it
+ALL_PROFILES=(claude agy research vncgui test)   # register it (first entry = default)
 ```
 
-Override any `DEFAULT_*` as needed (`PROFILE_coder_RAM=8192`, `PROFILE_coder_VOLUMES=(.cache .config)`, …), then:
+Override any `DEFAULT_*` as needed:
 
 ```bash
-dev-sandbox -p coder build
-dev-sandbox -p coder
+PROFILE_test_COLOR="33"
+PROFILE_test_SSH_PORT=2232                                   # enable SSH (0 = off)
+PROFILE_test_DNF=(htop strace)
+PROFILE_test_VOLUMES=(.cache .config)
+PROFILE_test_ENV=("OLLAMA_HOST=http://host.containers.internal:11434")
+PROFILE_test_ENV_PASS=("ANTHROPIC_API_KEY")                 # forwarded from the host
+```
+
+Build and run:
+
+```bash
+dev-sandbox -p test build -f
+dev-sandbox -p test
 ```
 
 ---
@@ -194,11 +212,18 @@ dev-sandbox -p coder
 
 Keep profiles or site policies in separate files instead of editing the script.
 
+> ⚠️ **Security:** a config file is a bash script sourced on the **host**, before the
+> container starts — not inside the sandbox. A config from an untrusted source can run
+> anything as you: read your files, change your sudo rules, install software. Only load
+> configs you trust.
+
 ### Usage
 
 ```bash
-dev-sandbox --config myconfig.sh -p coder
-dev-sandbox --config run_proxy --proxy 1080     # extension optional (see lookup)
+dev-sandbox --config ~/my-configs/devhw.sh          # by path
+cp devhw.sh ~/.dev-sandbox/ && dev-sandbox --config devhw.sh   # install, then by name
+dev-sandbox --config devhw.sh -p devhw              # a profile config
+dev-sandbox --config base.sh --config agents.sh     # repeatable / composable
 ```
 
 ### How it works
@@ -222,14 +247,19 @@ So `--config run_proxy` finds `./run_proxy.sh` or `~/.dev-sandbox/run_proxy.conf
 ### Two types of config files
 
 - **Profile config** — defines a profile (`PROFILE_<name>_*`) and adds it to
-  `ALL_PROFILES`. Pick it with `-p <name>`. Examples: `configs/devhw.sh`,
-  `configs/decompile.sh`.
-- **Behavior config** — defines no profile; it layers behavior onto whatever profile
-  you run, by registering run hooks. Examples: `configs/run_proxy.sh`,
-  `configs/bg_color.sh`.
+  `ALL_PROFILES`; pick it with `-p <name>`. Examples: `configs/devhw.sh` (USB, camera,
+  Wayland), `configs/decompile.sh` (reverse-engineering toolchain).
+- **Add-on config** — defines no profile; it layers behavior onto whatever profile you
+  run. Two ways to do that:
+  - *container-side* via `ROOT_WRAPPERS` / `ROOT_STARTUP` — e.g. `configs/_git-guard.sh`
+    intercepts `git` to block `push`, `tag`, branch creation, `reset --hard` and
+    `clean -f`.
+  - *host-side* via [run hooks](#run-hooks-prepost-run) — e.g. `configs/run_proxy.sh`
+    (SSH SOCKS5 tunnel), `configs/bg_color.sh` (terminal background tint).
 
-You can combine them — e.g. `--config run_proxy --config bg_color -p claude` — and
-because hooks register by unique function name, several behavior configs coexist.
+Combine freely — `dev-sandbox --config devhw.sh --config _git-guard.sh` — and because
+add-ons register by unique name, several coexist. `dev-sandbox -p <p> info` shows the
+resolved settings so you can confirm what a config changed.
 
 ### Run hooks (pre/post-run)
 
@@ -241,11 +271,11 @@ POST_RUN_HOOKS+=(my_post)  # runs after the container exits (also on Ctrl-C)
 ```
 
 A pre-run hook may append podman flags to `HOOK_PODMAN_ARGS`, which are spliced into
-`pcmd run` before the image name. These are **global** (every profile) and
-**dynamic** (resolved at run time — e.g. a path from `mktemp`), unlike the static
-per-profile `PROFILE_<p>_PODMAN_ARGS`. A pre-run error aborts the run; a post-run
-error is only reported, and the remaining hooks still run (teardown is registered
-before the hooks, so cleanup happens even if a pre-run hook fails).
+`pcmd run` before the image name. These are **global** (every profile) and **dynamic**
+(resolved at run time — e.g. a path from `mktemp`), unlike the static per-profile
+`PROFILE_<p>_PODMAN_ARGS`. A pre-run error aborts the run; a post-run error is only
+reported, and the remaining hooks still run (teardown is registered before the hooks,
+so cleanup happens even if a pre-run hook fails).
 
 Minimal example:
 
@@ -260,14 +290,16 @@ POST_RUN_HOOKS+=(_my_post)
 
 If a `ctx/` directory sits next to the profile (`~/.dev-sandbox/<profile>/ctx`), the
 build adds `COPY ctx /opt/ctx`, so real script files can be baked in and called from
-`TOOLS`/`AGENTS` (e.g. `TOOLS=("bash /opt/ctx/setup-root.sh")`). A config can stage it
-on load (e.g. `cp -a mysrc/. ctx/`); changing `ctx/` changes the build context, so the
+`TOOLS` / `AGENTS` (e.g. `TOOLS=("bash /opt/ctx/setup-root.sh")`). A config can stage
+it on load (`cp -a mysrc/. ctx/`); changing `ctx/` changes the build context, so the
 image rebuilds.
 
 ### Tips
 
+- `ALL_PROFILES=(devhw)` makes a config self-contained (only its profile is offered);
+  `ALL_PROFILES=(claude devhw research)` adds to the built-ins.
 - Keep secrets out of config files — forward them with `ENV_PASS` / `--env KEY`.
-- A behavior config should do nothing unless its trigger is present (e.g. `run_proxy`
+- An add-on config should do nothing unless its trigger is present (e.g. `run_proxy`
   only acts on `--proxy`), so it's safe to load by default.
 
 ---
@@ -278,17 +310,17 @@ What a change needs depends on where it lands (see [Build model](#build-model)):
 
 | You changed | Needs | Also |
 |---|---|---|
-| `DNF` / `TOOLS` (profile packages) | rebuild profile | — |
-| `AGENTS` (agent version) | rebuild profile | **purge** the `.local`/agent volume, or let the agent self-update |
-| `ROOT_WRAPPERS` / `ROOT_STARTUP` / `DEV_DOTFILES` | rebuild profile | **delete** the stale file from the rootconf/local volume (or `clean --purge`) |
-| `BASE_DNF_PACKAGES` / `BASE_EXTERNAL_TOOLS` | rebuild base `-f` | profile rebuilds on top |
+| `DNF` / `TOOLS` (profile packages) | `dev-sandbox -p <p> build` | — |
+| `AGENTS` (agent version) | `dev-sandbox -p <p> build` | **purge** the `.local`/agent volume, or let the agent self-update |
+| `ROOT_WRAPPERS` / `ROOT_STARTUP` / `DEV_DOTFILES` | `dev-sandbox -p <p> build` | **delete** the stale file from the rootconf/local volume (or `clean --purge`) |
+| `BASE_DNF_PACKAGES` / `BASE_EXTERNAL_TOOLS` | `dev-sandbox build -f` | profile rebuilds on top |
 | `VOLUMES`, `ENV`, `PODMAN_ARGS`, color, RAM, network, SSH, Privoxy, … | nothing | takes effect next run |
 
 Commands:
 
 ```bash
 dev-sandbox -p <profile> build        # rebuild profile (and base if missing)
-dev-sandbox -p <profile> build -f     # rebuild without cache (--no-cache)
+dev-sandbox -p <profile> build -f     # rebuild without cache (--no-cache; rebuilds base too)
 dev-sandbox -p <profile> clean        # remove the image (volumes kept)
 dev-sandbox -p <profile> clean --purge # remove the image AND all volumes
 ```
@@ -297,26 +329,35 @@ To refresh one wrapper/startup/dotfile without purging the whole profile, delete
 that file from its volume, then run again:
 
 ```bash
-# e.g. refresh a wrapper in the rootconf volume
+podman volume rm <profile>-sandbox-rootconf   # or edit the single file instead (below)
+# surgical: remove just one wrapper from the rootconf volume
 podman run --rm -v <profile>-sandbox-rootconf:/x alpine rm -f /x/wrappers/<name>
-dev-sandbox -p <profile>              # entrypoint rewrites it on next start
+dev-sandbox -p <profile>                      # entrypoint rewrites it on next start
 ```
+
+> Removing the `*-sandbox-local` volume also deletes bash history and all pip/npm
+> packages installed in the session. Agent credentials live in separate volumes
+> (`.claude`, `.gemini`), so they survive unless you remove those too (or `clean --purge`).
+> Your `~/.dev-sandbox/*.sh` config files are never touched by `clean`.
 
 ---
 
 ## CLI reference
 
 ```
-dev-sandbox [OPTIONS]                 Start the sandbox (default command)
+dev-sandbox                           Start the default profile
+dev-sandbox -p <profile>              Start a specific profile
 dev-sandbox build [-f]                Build the profile image (-f: no cache)
+dev-sandbox info                      Show the resolved settings for a profile
 dev-sandbox profiles                  List configured profiles
 dev-sandbox ls                        List running sandboxes
 dev-sandbox status                    Image/volume health and system info
 dev-sandbox clean [--purge]           Remove image (--purge: also volumes)
+dev-sandbox --version                 Print version
 dev-sandbox help                      Full help
 
 -p <profile>            Select profile (default: first in ALL_PROFILES)
---config PATH           Source an external config/profile file
+--config PATH           Source an external config/profile file (repeatable)
 --krun | --no-krun      Force microVM / standard container
 --tsi                   Force TSI networking (bypasses passt/firewall)
 --ram MiB | --cpus N    Resource limits
@@ -336,14 +377,16 @@ dev-sandbox help                      Full help
 
 ## Connecting to host services
 
-From inside the container, reach a service listening on the host (a database, a proxy,
-a dev server) via the special hostname `host.containers.internal`:
+From inside the container, reach a service listening on the host (a database, an LLM
+server, a dev server) via the hostname `host.containers.internal`:
 
 ```bash
-psql -h host.containers.internal -p 5432       # host Postgres
-curl http://host.containers.internal:3000      # host dev server
+curl http://host.containers.internal:11434/api/tags   # host Ollama
+psql -h host.containers.internal -U myuser mydb        # host PostgreSQL
+getent hosts host.containers.internal                  # verify it resolves
 ```
 
-This is also how `--proxy` / Privoxy reach the host SOCKS5 endpoint. Under `--no-krun`
-the container has its own network namespace, so the host's `127.0.0.1` is not the
-container's — always use `host.containers.internal` for host services.
+This is also how `--proxy` / Privoxy reach the host SOCKS5 endpoint. Note that under
+`--no-krun` the container has its own network namespace, so `localhost` /
+`127.0.0.1` means the **container itself**, not the host — always use
+`host.containers.internal` for host services.
