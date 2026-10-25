@@ -81,5 +81,5 @@ PROFILE_decompile_PODMAN_ARGS=(
 
 PROFILE_decompile_ROOT_STARTUP="${PROFILE_vncgui_ROOT_STARTUP}"
 
-# Register — append so claude/agy/research/vncgui stay intact.
+# Set as the sole and default profile for this config
 ALL_PROFILES=(decompile)
