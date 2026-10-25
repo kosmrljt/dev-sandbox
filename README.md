@@ -37,7 +37,7 @@ sudo apt install podman crun
 curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/dev-1.1.3/dev-sandbox.sh
 chmod +x ~/.local/bin/dev-sandbox
 
-# Optionaly install new profiles
+# Optionally install new profiles
 mkdir -p ~/.dev-sandbox
 curl -L https://github.com/kosmrljt/dev-sandbox/archive/dev-1.1.3.tar.gz \
   | tar xz -C ~/.dev-sandbox --strip-components=2 dev-sandbox-dev-1.1.3/configs
