@@ -1149,6 +1149,7 @@ do_run() {
 
     if ! pcmd image exists "${image_name}" 2>/dev/null; then
         warn "Image not found. Building ..."
+        check_prereqs            # only needed before a build; skipped when the image exists
         do_build "$profile"
     fi
 
@@ -1818,7 +1819,7 @@ ${GREEN}Commands:${NC}
 
 ${GREEN}Profile & Config:${NC}
   -p <profile>            Select profile (default: ${DEFAULT_PROFILE})
-  --config PATH           Source custom shell configuration/profile script
+  --config PATH[,PATH...] Source config/profile scripts (repeatable; comma-separated list)
 
 ${GREEN}Runtime & Isolation:${NC}
   --krun                  Force krun microVM isolation (default)
@@ -1884,6 +1885,25 @@ _resolve_config() {
     echo ""
 }
 
+# Load one or more configs given as a comma-separated list (e.g.
+# "--config run_proxy,bg_color"). Each entry is resolved and sourced in order.
+_load_configs() {
+    local list="$1" cfg resolved
+    IFS=',' read -ra _cfgs <<< "$list"
+    for cfg in "${_cfgs[@]}"; do
+        [[ -n "$cfg" ]] || continue
+        resolved=$(_resolve_config "$cfg")
+        if [[ -n "$resolved" ]]; then
+            echo "Load $resolved"
+            source "$resolved"
+        else
+            echo "✗ Config file not found: $cfg" >&2
+            echo "  Searched $cfg (and .sh/.conf) in $(pwd) and ${SANDBOX_BASE}" >&2
+            exit 1
+        fi
+    done
+}
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Run hooks — pre/post-run extension points
 #
@@ -1926,32 +1946,15 @@ _args=("$@")
 for (( _i=0; _i<${#_args[@]}; _i++ )); do
     case "${_args[$_i]}" in
         --config=*)
-            _cfg="${_args[$_i]#*=}"
-            _resolved=$(_resolve_config "$_cfg")
-            if [[ -n "$_resolved" ]]; then
-                echo "Load $_resolved"
-                source "$_resolved"
-            else
-                echo "✗ Config file not found: $_cfg" >&2
-                echo "  Searched $_cfg (and .sh/.conf) in $(pwd) and ${SANDBOX_BASE}" >&2
-                exit 1
-            fi
+            _load_configs "${_args[$_i]#*=}"
             ;;
         --config)
             _cfg="${_args[$((_i+1))]:-}"
             if [[ -z "$_cfg" ]]; then
                 echo "✗ Missing config file path after --config" >&2; exit 1
             fi
-            _resolved=$(_resolve_config "$_cfg")
-            if [[ -n "$_resolved" ]]; then
-                echo "Load $_resolved"
-                source "$_resolved"
-                ((_i++)) || true
-            else
-                echo "✗ Config file not found: $_cfg" >&2
-                echo "  Searched $_cfg (and .sh/.conf) in $(pwd) and ${SANDBOX_BASE}" >&2
-                exit 1
-            fi
+            _load_configs "$_cfg"
+            ((_i++)) || true
             ;;
     esac
 done
@@ -2208,7 +2211,7 @@ case "${1:-}" in
         ;;
     clean)      shift; do_clean "$PROFILE" "${1:-}" ;;
     status)     do_status "$PROFILE" ;;
-    info)       do_info "$PROFILE" ;;
+    info)       check_prereqs; do_info "$PROFILE" ;;
     ls|list)    do_list ;;
     profiles)   do_profiles ;;
     help|--help|-h) usage ;;
@@ -2227,6 +2230,7 @@ case "${1:-}" in
             err "Run 'dev-sandbox help' for usage"
             exit 1
         fi
-        check_prereqs; do_run "$PROFILE" "$@"
+        # No check_prereqs here: do_run runs it only when it must build.
+        do_run "$PROFILE" "$@"
         ;;
 esac
