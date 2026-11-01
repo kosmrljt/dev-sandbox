@@ -744,10 +744,37 @@ generate_entrypoint() {
             cat > \"\${ROOTCONF}/wrappers/${wname}\" << 'WRAPEOF'
 ${wbody}
 WRAPEOF
+            chmod +x \"\${ROOTCONF}/wrappers/${wname}\"
             echo \"▶ Generated wrapper: ${wname}\"
         fi"
         fi
     done
+
+    # install_agent wrapper — generated from AGENTS so you can (re)install the
+    # agent manually inside the sandbox (runs as dev, into ~/.local; persists).
+    local agents=()
+    get_profile_array_ref "$profile" AGENTS agents
+    local agent_cmds=""
+    for a in "${agents[@]}"; do
+        local clean
+        clean=$(echo "$a" | sed 's/#.*//g' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
+        [[ -n "$clean" ]] && agent_cmds="${agent_cmds}${clean}
+"
+    done
+    local agent_wrapper_block=""
+    if [[ -n "$agent_cmds" ]]; then
+        agent_wrapper_block="
+        if [ ! -f \"\${ROOTCONF}/wrappers/install_agent\" ]; then
+            cat > \"\${ROOTCONF}/wrappers/install_agent\" << 'IAEOF'
+#!/bin/bash
+set -e
+echo \"▶ Installing/updating agent(s) ...\"
+${agent_cmds}echo \"✓ install_agent done — restart the agent if it was running.\"
+IAEOF
+            chmod +x \"\${ROOTCONF}/wrappers/install_agent\"
+            echo \"▶ Generated wrapper: install_agent\"
+        fi"
+    fi
 
     local dotfiles=()
     get_profile_array_ref "$profile" DEV_DOTFILES dotfiles
@@ -824,6 +851,7 @@ STARTUPEOF
 
     # Command wrappers
 ${wrapper_init_block}
+${agent_wrapper_block}
 
     # ── 4. Run startup hook ──
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
@@ -831,12 +859,12 @@ ${wrapper_init_block}
             echo "⚠ startup.sh exited non-zero — continuing"
     fi
 
-    # Install wrappers into PATH
+    # Install wrappers into PATH (symlinks → edits in the volume take effect live)
     if [ -d "\${ROOTCONF}/wrappers" ]; then
         for w in "\${ROOTCONF}/wrappers/"*; do
             if [ -f "\$w" ]; then
-                cp "\$w" /usr/local/bin/
-                chmod +x "/usr/local/bin/\$(basename "\$w")"
+                chmod +x "\$w"
+                ln -sf "\$w" "/usr/local/bin/\$(basename "\$w")"
             fi
         done
     fi
