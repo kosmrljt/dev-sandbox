@@ -863,7 +863,7 @@ ${agent_wrapper_block}
     if [ -d "\${ROOTCONF}/wrappers" ]; then
         for w in "\${ROOTCONF}/wrappers/"*; do
             if [ -f "\$w" ]; then
-                chmod +x "\$w" 
+                chmod +x "\$w"
                 ln -sf "\$w" "/usr/local/bin/\$(basename "\$w")"
             fi
         done
@@ -1549,7 +1549,7 @@ do_list() {
     info "Running sandboxes:"
     echo ""
 
-    # List every sandbox by its image (*-sandbox-image)
+    # List every sandbox by its image (*-sandbox-image) 
     local containers
     containers=$(pcmd ps --format "{{.Names}}|{{.Status}}|{{.Ports}}|{{.Image}}" 2>/dev/null)
 
@@ -1565,7 +1565,14 @@ do_list() {
                 ssh_info=$(echo "$ports" | grep -oP '\d+->22' | head -1 || true)
                 [[ -n "$ssh_info" ]] && ssh_info=" ssh:${ssh_info}"
             fi
+            # Host project dir = source of the /app/... bind mount (works for any
+            # container, no label needed). || true so inspect failures don't abort.
+            local workdir
+            workdir=$(pcmd inspect "$name" --format \
+                '{{range .Mounts}}{{.Source}}:{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null \
+                | awk -F: '$2 ~ /^\/app\// {print $1; exit}' || true)
             echo -e "  ${CYAN}${name}${NC}  ${status}${ssh_info}"
+            [[ -n "$workdir" ]] && echo -e "      ${workdir}"
         done <<< "$containers"
     fi
 
