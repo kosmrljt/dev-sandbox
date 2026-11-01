@@ -863,7 +863,7 @@ ${agent_wrapper_block}
     if [ -d "\${ROOTCONF}/wrappers" ]; then
         for w in "\${ROOTCONF}/wrappers/"*; do
             if [ -f "\$w" ]; then
-                chmod +x "\$w"
+                chmod +x "\$w" 
                 ln -sf "\$w" "/usr/local/bin/\$(basename "\$w")"
             fi
         done
@@ -1515,6 +1515,8 @@ do_run() {
     pcmd run --rm -it \
         --name "${container_name}" \
         --hostname "${profile}-sandbox" \
+        --label dev-sandbox=1 \
+        --label "dev-sandbox-profile=${profile}" \
         "${krun_flags[@]}" \
         "${net_flags[@]}" \
         "${ssh_flags[@]}" \
@@ -1547,28 +1549,27 @@ do_list() {
     info "Running sandboxes:"
     echo ""
 
-    local found=false
-    for p in "${ALL_PROFILES[@]}"; do
-        local containers
-        containers=$(pcmd ps --filter "name=${p}-" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>/dev/null)
-        if [[ -n "$containers" ]]; then
-            found=true
-            while IFS='|' read -r name status ports; do
-                local ssh_info=""
-                if [[ -n "$ports" ]]; then
-                    ssh_info=$(echo "$ports" | grep -oP '\d+->22' | head -1)
-                    if [[ -n "$ssh_info" ]]; then
-                        ssh_info=" ssh:${ssh_info}"
-                    fi
-                fi
-                echo -e "  ${CYAN}${name}${NC}  ${status}${ssh_info}"
-            done <<< "$containers"
-        fi
-    done
+    # List every sandbox by its image (*-sandbox-image)
+    local containers
+    containers=$(pcmd ps --format "{{.Names}}|{{.Status}}|{{.Ports}}|{{.Image}}" 2>/dev/null)
 
-    if [[ "$found" != "true" ]]; then
-        echo "  No running sandboxes"
+    local found=false
+    if [[ -n "$containers" ]]; then
+        while IFS='|' read -r name status ports image; do
+            [[ -n "$name" ]] || continue
+            case "$image" in *-sandbox-image*) ;; *) continue ;; esac   # only our sandboxes
+            found=true
+            local ssh_info=""
+            if [[ -n "$ports" ]]; then
+                # || true: no :22 mapping is normal (SSH off) and must not abort under set -e
+                ssh_info=$(echo "$ports" | grep -oP '\d+->22' | head -1 || true)
+                [[ -n "$ssh_info" ]] && ssh_info=" ssh:${ssh_info}"
+            fi
+            echo -e "  ${CYAN}${name}${NC}  ${status}${ssh_info}"
+        done <<< "$containers"
     fi
+
+    [[ "$found" == true ]] || echo "  No running sandboxes"
     echo ""
 }
 
