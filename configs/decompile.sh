@@ -42,6 +42,7 @@ PROFILE_decompile_DNF=(
     libicu
     ffmpeg-free tesseract tesseract-langpack-fra
     libxkbcommon mesa-libGL mesa-libEGL libglvnd-opengl
+    java-25-openjdk
 )
 
 # ROOT stage (before USER dev) — installs the RE toolchain into the image, so a
