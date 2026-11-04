@@ -8,8 +8,9 @@
 #     symlink in /usr/local/bin (on PATH for dev; no PATH editing needed).
 #   - OUR scripts are NOT copied: they live in /opt/ctx (COPYed by the Dockerfile)
 #     and we just symlink them into /usr/local/bin. Single source, no duplication.
-#   - JDK 21 is made the DEFAULT java (Fedora 44 ships java-25, which Ghidra can't
-#     use); nothing else here needs Java, so 21 as default is safe.
+#   - JDK 25 is made the DEFAULT java: current Ghidra (12.2+) is compiled to Java
+#     25 bytecode and refuses to start on older JDKs. Nothing else here needs a
+#     specific Java, so 25 as default is safe.
 #
 # OFFLINE option: drop installers into ./vendor and they're used instead of
 # downloading (see vendor/README.md). GUI-app installs are best-effort (|| true):
@@ -29,18 +30,18 @@ gh_asset() {  # gh_asset <owner/repo> <regex> — print first matching asset URL
         | grep -o "https://[^\"]*$2" | head -n1
 }
 
-# --- JDK 21, made the default java -------------------------------------------
-arch="$(uname -m)"; case "$arch" in x86_64) AQ=x64;; aarch64) AQ=aarch64;; *) AQ="$arch";; esac
-JDK_TGZ="$(ls "$VENDOR"/*jdk*21*linux*.tar.gz "$VENDOR"/OpenJDK21*.tar.gz 2>/dev/null | head -n1 || true)"
-if [[ -n "$JDK_TGZ" ]]; then echo "Using local JDK 21: $JDK_TGZ"; cp "$JDK_TGZ" /tmp/jdk21.tgz
-else dl "https://api.adoptium.net/v3/binary/latest/21/ga/linux/${AQ}/jdk/hotspot/normal/eclipse" /tmp/jdk21.tgz; fi
-mkdir -p /opt/jdk21
-tar -xzf /tmp/jdk21.tgz -C /opt/jdk21 --strip-components=1
-rm /tmp/jdk21.tgz
-# Make 21 the default java for everything (there is no other JDK in the image).
-for b in java javac jar keytool; do ln -sf "/opt/jdk21/bin/$b" "/usr/local/bin/$b"; done
-export JAVA_HOME=/opt/jdk21
-export PATH="/opt/jdk21/bin:$PATH"
+# --- JDK 25, made the default java -------------------------------------------
+#arch="$(uname -m)"; case "$arch" in x86_64) AQ=x64;; aarch64) AQ=aarch64;; *) AQ="$arch";; esac
+#JDK_TGZ="$(ls "$VENDOR"/*jdk*25*linux*.tar.gz "$VENDOR"/OpenJDK25*.tar.gz 2>/dev/null | head -n1 || true)"
+#if [[ -n "$JDK_TGZ" ]]; then echo "Using local JDK 25: $JDK_TGZ"; cp "$JDK_TGZ" /tmp/jdk25.tgz
+#else dl "https://api.adoptium.net/v3/binary/latest/25/ga/linux/${AQ}/jdk/hotspot/normal/eclipse" /tmp/jdk25.tgz; fi
+#mkdir -p /opt/jdk25
+#tar -xzf /tmp/jdk25.tgz -C /opt/jdk25 --strip-components=1
+#rm /tmp/jdk25.tgz
+## Make 25 the default java for everything (there is no other JDK in the image).
+#for b in java javac jar keytool; do ln -sf "/opt/jdk25/bin/$b" "/usr/local/bin/$b"; done
+#export JAVA_HOME=/opt/jdk25
+#export PATH="/opt/jdk25/bin:$PATH"
 
 # --- Ghidra ------------------------------------------------------------------
 GHIDRA_ZIP="$(ls "$VENDOR"/ghidra_*_PUBLIC_*.zip 2>/dev/null | head -n1 || true)"
@@ -96,8 +97,10 @@ rm -rf /tmp/pycdc
 #   (b) the BRIDGE `bridge-mcp-ghidra` (stdio MCP server) that Claude Code launches
 #
 # The plugin is version-locked to Ghidra, so we build it from source against the
-# installed Ghidra (12.1.4). Build backend is Maven (hence `maven` in the DNF
-# list); `uv` is installed because the project's setup helper expects it.
+# installed Ghidra (the release fetched above). It compiles against that Ghidra's
+# jars, so it needs the matching JDK 25 set up above. Build backend is Maven
+# (hence `maven` in the DNF list); `uv` is installed because the project's setup
+# helper expects it.
 # Best-effort: if the build can't fetch its deps, MCP is simply absent (see
 # docs/GUIDE.md to build it by hand).
 ( pip install --break-system-packages uv || true
@@ -146,7 +149,7 @@ pip install --break-system-packages \
   printf '#!/bin/sh\nexec /opt/ImHex.AppImage --appimage-extract-and-run "$@"\n' > /usr/local/bin/imhex
   chmod +x /usr/local/bin/imhex ) || echo "WARN: ImHex not installed"
 
-# jadx-gui — Java/APK decompiler GUI (uses our JDK 21).
+# jadx-gui — Java/APK decompiler GUI (uses our JDK 25).
 ( JZ="$(ls "$VENDOR"/jadx-*.zip 2>/dev/null | head -n1 || true)"
   [[ -n "$JZ" ]] && cp "$JZ" /tmp/jadx.zip \
     || dl "$(gh_asset skylot/jadx 'jadx-[0-9][^"]*\.zip')" /tmp/jadx.zip
