@@ -3,10 +3,6 @@
 `setup-root.sh` uses whatever is here instead of downloading. Leave it empty to
 download from the official sources at build time.
 
-- `*jdk*21*linux*.tar.gz` — an Eclipse Temurin JDK 21 tarball (e.g.
-  `OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz`). Used instead of downloading from
-  Adoptium. Ghidra 12.x needs JDK 21; Fedora 44 no longer ships it, so this is
-  how you keep it offline/pinned.
 - `ghidra_*_PUBLIC_*.zip` — a Ghidra release zip. Used instead of the GitHub
   release. Runs on the private /opt/jdk21 installed by setup-root.sh.
 - `pycdc/` — a local checkout of https://github.com/zrax/pycdc (built here).
