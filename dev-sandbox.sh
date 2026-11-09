@@ -1906,7 +1906,7 @@ EOF
 # Pre-scan for --config (must load before profile validation)
 # Config file lookup: the name as given, then with .sh / .conf appended; each
 # tried in the current directory first, then in ~/.dev-sandbox/ (SANDBOX_BASE).
-# So `--config run_proxy` finds ./run_proxy.sh or ~/.dev-sandbox/run_proxy.conf.
+# So `--config run_ssh_proxy` finds ./run_ssh_proxy.sh or ~/.dev-sandbox/run_ssh_proxy.conf.
 _resolve_config() {
     local cfg="$1" base c
     for base in "" "${SANDBOX_BASE}/"; do
@@ -1922,7 +1922,7 @@ _resolve_config() {
 }
 
 # Load one or more configs given as a comma-separated list (e.g.
-# "--config run_proxy,bg_color"). Each entry is resolved and sourced in order.
+# "--config run_ssh_proxy,bg_color"). Each entry is resolved and sourced in order.
 _load_configs() {
     local list="$1" cfg resolved
     IFS=',' read -ra _cfgs <<< "$list"
