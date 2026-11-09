@@ -67,6 +67,7 @@ Once inside, you are in an isolated container:
 
 > **Note (2026-10-25):** After a recent Fedora update, krun's passt networking broke
 > (`start passt` error) due to a crun-krun ↔ passt version mismatch. Workaround: `sudo dnf downgrade passt` — or run with `--tsi`.
+> Test if the package update resolves the issue: `podman run --rm --annotation run.oci.handler=krun --annotation krun.use_passt=1 fedora:44 echo ok `
 
 ## Profiles
 
