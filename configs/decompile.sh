@@ -49,7 +49,7 @@ PROFILE_decompile_DNF=(
 # ROOT stage (before USER dev) — installs the RE toolchain into the image, so a
 # rebuild refreshes it. Nothing is written to ~/.local at build.
 PROFILE_decompile_TOOLS=(
-    "bash /opt/ctx/setup-root.sh"
+    "bash /opt/ctx/setup-root.sh && rm -rf /tmp/*"
 )
 
 # DEV stage (as dev) — Claude Code via its native installer into ~/.local/bin.
@@ -61,6 +61,7 @@ PROFILE_decompile_ENV=(
     "DISPLAY=:1"
     "GHIDRA_HOME=/opt/ghidra"
     "GHIDRA_INSTALL_DIR=/opt/ghidra"
+    "JAVA_HOME=/usr/lib/jvm/java-25-openjdk"
     "DOTNET_ROOT=/opt/dotnet"
     "DOTNET_ROLL_FORWARD=Major"
     "DOTNET_CLI_TELEMETRY_OPTOUT=1"
@@ -77,7 +78,6 @@ PROFILE_decompile_PODMAN_ARGS=(
     --shm-size 2g
     -p 127.0.0.1:5901:5901
     --tmpfs /var/log:rw,size=50m,mode=1777
-    --tmpfs /tmp:rw,size=800m,mode=1777
 )
 
 PROFILE_decompile_ROOT_STARTUP="${PROFILE_vncgui_ROOT_STARTUP}"
