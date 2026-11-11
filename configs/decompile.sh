@@ -77,6 +77,7 @@ PROFILE_decompile_PODMAN_ARGS=(
     --shm-size 2g
     -p 127.0.0.1:5901:5901
     --tmpfs /var/log:rw,size=50m,mode=1777
+    --tmpfs /tmp:rw,size=800m,mode=1777
 )
 
 PROFILE_decompile_ROOT_STARTUP="${PROFILE_vncgui_ROOT_STARTUP}"
