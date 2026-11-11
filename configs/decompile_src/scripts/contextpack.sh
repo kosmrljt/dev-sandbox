@@ -28,4 +28,5 @@ pyghidra "$BIN" /opt/scripts/ContextPack.py "$OUT" ${FILTER:+"$FILTER"}
 
 echo
 echo "== Done: $OUT =="
-echo "Feed it to an agent together with AGENT_PROMPT.md as the system prompt."
+echo "Next: open claude in this dir; CLAUDE.md has the rules."
+
