@@ -56,7 +56,7 @@ Port is 8089; change it in Ghidra (Edit > Tool Options > GhidraMCP HTTP Server)
 and in .mcp.json. If /mcp shows "failed": Ghidra not open, plugin not enabled,
 or no program loaded.
 
-Rebuild MCP by hand if the plugin is missing (bethington fork, Maven + JDK 21):
+Rebuild MCP by hand if the plugin is missing (bethington fork, Maven + JDK 25):
 
     pip install --break-system-packages uv
     git clone https://github.com/bethington/ghidra-mcp && cd ghidra-mcp
