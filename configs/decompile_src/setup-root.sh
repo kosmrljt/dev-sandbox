@@ -30,18 +30,6 @@ gh_asset() {  # gh_asset <owner/repo> <regex> — print first matching asset URL
         | grep -o "https://[^\"]*$2" | head -n1
 }
 
-# --- JDK 25, made the default java -------------------------------------------
-#arch="$(uname -m)"; case "$arch" in x86_64) AQ=x64;; aarch64) AQ=aarch64;; *) AQ="$arch";; esac
-#JDK_TGZ="$(ls "$VENDOR"/*jdk*25*linux*.tar.gz "$VENDOR"/OpenJDK25*.tar.gz 2>/dev/null | head -n1 || true)"
-#if [[ -n "$JDK_TGZ" ]]; then echo "Using local JDK 25: $JDK_TGZ"; cp "$JDK_TGZ" /tmp/jdk25.tgz
-#else dl "https://api.adoptium.net/v3/binary/latest/25/ga/linux/${AQ}/jdk/hotspot/normal/eclipse" /tmp/jdk25.tgz; fi
-#mkdir -p /opt/jdk25
-#tar -xzf /tmp/jdk25.tgz -C /opt/jdk25 --strip-components=1
-#rm /tmp/jdk25.tgz
-## Make 25 the default java for everything (there is no other JDK in the image).
-#for b in java javac jar keytool; do ln -sf "/opt/jdk25/bin/$b" "/usr/local/bin/$b"; done
-#export JAVA_HOME=/opt/jdk25
-#export PATH="/opt/jdk25/bin:$PATH"
 
 # --- Ghidra ------------------------------------------------------------------
 GHIDRA_ZIP="$(ls "$VENDOR"/ghidra_*_PUBLIC_*.zip 2>/dev/null | head -n1 || true)"
@@ -125,7 +113,7 @@ rm -rf /tmp/pycdc
 # disassembly without Ghidra.
 pip install --break-system-packages \
     numpy pillow matplotlib opencv-python-headless \
-    pefile capstone lief || true
+    pefile capstone lief pyinstxtractor-ng || true
 
 # =============================================================================
 # GUI decompile tools (for the VNC desktop). Best-effort: a changed URL won't
