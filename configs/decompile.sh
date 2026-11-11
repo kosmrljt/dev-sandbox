@@ -43,6 +43,7 @@ PROFILE_decompile_DNF=(
     ffmpeg-free tesseract tesseract-langpack-fra
     libxkbcommon mesa-libGL mesa-libEGL libglvnd-opengl
     java-25-openjdk
+    gdb upx innoextract unshield cabextract
 )
 
 # ROOT stage (before USER dev) — installs the RE toolchain into the image, so a
@@ -60,7 +61,6 @@ PROFILE_decompile_ENV=(
     "DISPLAY=:1"
     "GHIDRA_HOME=/opt/ghidra"
     "GHIDRA_INSTALL_DIR=/opt/ghidra"
-    "JAVA_HOME=/usr/lib/jvm/java-25-openjdk"
     "DOTNET_ROOT=/opt/dotnet"
     "DOTNET_ROLL_FORWARD=Major"
     "DOTNET_CLI_TELEMETRY_OPTOUT=1"
