@@ -113,7 +113,7 @@ rm -rf /tmp/pycdc
 # disassembly without Ghidra.
 pip install --break-system-packages \
     numpy pillow matplotlib opencv-python-headless \
-    pefile capstone lief pyinstxtractor-ng || true
+    pefile capstone lief pyinstxtractor-ng unicorn || true
 
 # =============================================================================
 # GUI decompile tools (for the VNC desktop). Best-effort: a changed URL won't
