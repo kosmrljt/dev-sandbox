@@ -34,8 +34,13 @@ sudo dnf install podman crun-krun
 sudo apt install podman crun
 
 # Install
-curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/main/dev-sandbox.sh
+curl -o ~/.local/bin/dev-sandbox https://raw.githubusercontent.com/kosmrljt/dev-sandbox/dev-1.1.3/dev-sandbox.sh
 chmod +x ~/.local/bin/dev-sandbox
+
+# Optionally install new profiles
+mkdir -p ~/.dev-sandbox
+curl -L https://github.com/kosmrljt/dev-sandbox/archive/dev-1.1.3.tar.gz \
+  | tar xz -C ~/.dev-sandbox --strip-components=2 dev-sandbox-dev-1.1.3/configs
 
 # Run from your project directory
 cd ~/my-project
@@ -59,6 +64,11 @@ Once inside, you are in an isolated container:
 - Type `exit` to leave
 
 
+
+> **Note (2026-10-25):** After a recent Fedora update, krun's passt networking broke
+> (`start passt` error) due to a crun-krun ↔ passt version mismatch. Workaround: `sudo dnf downgrade passt` — or run with `--tsi`.
+
+> Test if the package update resolves the issue: `podman run --rm --annotation run.oci.handler=krun --annotation krun.use_passt=1 fedora:44 echo ok `
 
 ## Profiles
 
@@ -166,11 +176,22 @@ ALL_PROFILES=(claude research agy vncgui test)
 
 Settings resolve: CLI flag > Profile > Environment > Default.
 
-Profiles can also be defined in external config files — useful for project-specific or machine-specific setups:
+### External config files
+
+Instead of editing the script, profiles and policies can be kept in separate config files loaded with `--config`. Config files can define new profiles (e.g. hardware development with USB and Wayland access) or modify existing ones (e.g. restricting git commands like push, tag, and branch creation). Multiple configs are composable:
 
 ```bash
-dev-sandbox --config devhw.sh           # load from ~/.dev-sandbox/
-dev-sandbox --config ~/configs/work.sh  # load from explicit path
+dev-sandbox --config devhw.sh                          # new profile
+dev-sandbox --config _git-guard.sh                     # policy for all profiles
+dev-sandbox --config devhw.sh --config _git-guard.sh   # combine both
+```
+
+Config files are loaded from the current directory or `~/.dev-sandbox/`. Install the included examples:
+
+```bash
+mkdir -p ~/.dev-sandbox
+curl -sL https://github.com/kosmrljt/dev-sandbox/archive/refs/heads/main.tar.gz \
+  | tar -xz -C ~/.dev-sandbox --strip-components=2 dev-sandbox-main/configs
 ```
 
 Full configuration reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).

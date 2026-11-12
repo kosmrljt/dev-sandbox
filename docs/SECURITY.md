@@ -9,6 +9,15 @@ dev-sandbox provides host isolation through Podman containers (optionally with k
 - **Kernel** (krun): The VM runs its own Linux kernel. Container escape requires a VM escape, not just a namespace escape.
 - **Network** (when configured): nftables blocks outbound traffic except allowed destinations.
 
+## Disabled host security modules
+
+The script disables two host-level security mechanisms for compatibility:
+
+- **SELinux** (`--security-opt label=disable`) — disabled to allow bind mounts without relabeling. On Fedora/RHEL systems, this removes SELinux type enforcement on the container.
+- **AppArmor** (`--security-opt apparmor=unconfined`) — disabled for Ubuntu compatibility (rootless podman + crun requires it). On Ubuntu systems, this removes AppArmor confinement from the container process.
+
+Both are applied unconditionally to all profiles. The primary isolation boundaries remain: filesystem (bind mount scoping), user namespace (rootless podman), and optionally the VM boundary (krun). These settings trade MAC-level confinement for broad compatibility.
+
 ## What is NOT isolated
 
 ### Project directory is writable
@@ -22,6 +31,22 @@ An agent can write files that execute on the host:
 - `.vscode/tasks.json` → runs in VS Code
 
 **Mitigation**: Review project directory changes after sessions (`git diff`).
+
+**Disable git hooks on the host** to prevent execution of agent-planted hooks:
+
+```bash
+# Per-repo — disable hooks in this project
+git config core.hooksPath /dev/null
+
+# Global — disable hooks everywhere
+git config --global core.hooksPath /dev/null
+
+# Per-command — skip hooks for one operation
+git -c core.hooksPath=/dev/null commit -m "message"
+
+# Re-enable
+git config --unset core.hooksPath
+```
 
 ### Persistent volumes contain executable paths
 

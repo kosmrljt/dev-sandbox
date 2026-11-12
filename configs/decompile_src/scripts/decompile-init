@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# decompile-init - scaffold a reverse-engineering project in the current dir.
+# Usage:
+#   decompile-init          CLAUDE.md (agent rules) + review/
+#   decompile-init --mcp    also .mcp.json + .claude/settings.json (live MCP loop)
+#   decompile-init <dir>    target a specific directory instead of "."
+#   decompile-init --help
+#
+# Templates come from /opt/ctx/init; the user guide is /opt/ctx/docs/GUIDE.md.
+
+set -euo pipefail
+
+INIT="${DECOMPILE_INIT:-/opt/ctx/init}"
+GUIDE="${DECOMPILE_DOC:-/opt/ctx/docs}/GUIDE.md"
+WANT_MCP=0
+TARGET="."
+
+for a in "$@"; do
+    case "$a" in
+        --mcp)     WANT_MCP=1 ;;
+        -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*)        echo "unknown option: $a" >&2; exit 2 ;;
+        *)         TARGET="$a" ;;
+    esac
+done
+
+if [[ ! -d "$INIT" ]]; then
+    echo "init dir not found: $INIT (rebuild the profile)" >&2
+    exit 1
+fi
+
+mkdir -p "$TARGET"
+# cp -n never clobbers a file you already edited.
+cp -n "$INIT/CLAUDE.md" "$TARGET/" 2>/dev/null && echo "+ CLAUDE.md" || echo "= CLAUDE.md (exists, kept)"
+
+if [[ "$WANT_MCP" == 1 ]]; then
+    cp -n "$INIT/.mcp.json" "$TARGET/" 2>/dev/null && echo "+ .mcp.json" || echo "= .mcp.json (exists, kept)"
+    mkdir -p "$TARGET/.claude"
+    cp -n "$INIT/claude-settings.json" "$TARGET/.claude/settings.json" 2>/dev/null \
+        && echo "+ .claude/settings.json" || echo "= .claude/settings.json (exists, kept)"
+fi
+
+mkdir -p "$TARGET/review"
+
+echo
+echo "Project ready in: $(cd "$TARGET" && pwd)"
+echo "Guide (with examples):  less $GUIDE"
