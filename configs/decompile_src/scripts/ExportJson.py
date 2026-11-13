@@ -1,7 +1,7 @@
 # ExportJson.py — Ghidra post-script: emit the whole program as structured JSON.
 #
 # This is the machine-readable ("API") output: one object per function with its
-# signature, call graph edges, referenced strings/data (addr + value), and the
+# namespace-qualified name ("name"; "short" is the bare name), signature, call graph edges, referenced strings/data (addr + value), and the
 # decompiled pseudocode. analyze.py consumes this to drive selective LLM passes.
 #
 # Args: <output.json>
@@ -50,19 +50,28 @@ def refs(func):
     return strings, datas
 
 
+def qname(f):
+    """Namespace-qualified name (Unit::Class::Method); plain name for globals."""
+    try:
+        return f.getName(True)
+    except:
+        return f.getName()
+
+
 out = []
 for func in prog.getFunctionManager().getFunctions(True):
     strings, datas = refs(func)
     res = decomp.decompileFunction(func, 60, monitor)
     code = res.getDecompiledFunction().getC() if (res and res.decompileCompleted()) else None
     out.append({
-        "name": func.getName(),
+        "name": qname(func),          # qualified, so same-named methods stay distinct
+        "short": func.getName(),
         "address": str(func.getEntryPoint()),
         "signature": str(func.getSignature()),
         "is_thunk": func.isThunk(),
         "is_external": func.isExternal(),
-        "callers": sorted(set(c.getName() for c in func.getCallingFunctions(monitor))),
-        "callees": sorted(set(c.getName() for c in func.getCalledFunctions(monitor))),
+        "callers": sorted(set(qname(c) for c in func.getCallingFunctions(monitor))),
+        "callees": sorted(set(qname(c) for c in func.getCalledFunctions(monitor))),
         "strings": strings,
         "data_refs": datas,
         "pseudocode": code,

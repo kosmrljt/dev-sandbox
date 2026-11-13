@@ -41,3 +41,21 @@ rename variables/functions, set prototypes, **create and apply structs/types**
 then RE-DECOMPILE and read the cleaner output. Repeat until `uVar`/`undefined` are
 gone. Query xrefs/memory before each claim. Reads run automatically; changes are
 prompted (`.claude/settings.json`).
+
+## Status of claims
+
+Mark every claim [C] confirmed (evidence you cite, or the user's notes) or
+[H] hypothesis. "Hypotheses (unverified)" sections hold the [H] items.
+The user's notes in review/ win over your own reading.
+
+
+## Skills in this project (.claude/skills)
+
+The re-* skills are for binaries without source code (they read Ghidra's out.json).
+
+- /re-explain <function or question> - how one part works, every claim verified (explain/)
+- /re-map - interactive map of modules and functions (map/index.html)
+- /re-doc - how the whole program or library is built and runs (ARCHITECTURE.md)
+Other skills may be present in .claude/skills; their descriptions say when to use
+them. Use a skill when the user asks for what it does; otherwise follow the
+workflow above.

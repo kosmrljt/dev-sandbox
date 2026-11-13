@@ -8,13 +8,13 @@
 #     symlink in /usr/local/bin (on PATH for dev; no PATH editing needed).
 #   - OUR scripts are NOT copied: they live in /opt/ctx (COPYed by the Dockerfile)
 #     and we just symlink them into /usr/local/bin. Single source, no duplication.
-#   - JDK 25 is made the DEFAULT java: current Ghidra (12.2+) is compiled to Java
-#     25 bytecode and refuses to start on older JDKs. Nothing else here needs a
-#     specific Java, so 25 as default is safe.
+#   - Java comes from dnf (java-25-openjdk in PROFILE_decompile_DNF), not from this
+#     script: current Ghidra (12.2+) is compiled to Java 25 bytecode and refuses to
+#     start on older JDKs.
 #
 # OFFLINE option: drop installers into ./vendor and they're used instead of
 # downloading (see vendor/README.md). GUI-app installs are best-effort (|| true):
-# a changed URL never hard-fails the build; check GUI-TOOLS.md if one is missing.
+# a changed URL never hard-fails the build; look for a WARN line in the build log.
 
 set -euxo pipefail
 
@@ -86,7 +86,7 @@ rm -rf /tmp/pycdc
 #
 # The plugin is version-locked to Ghidra, so we build it from source against the
 # installed Ghidra (the release fetched above). It compiles against that Ghidra's
-# jars, so it needs the matching JDK 25 set up above. Build backend is Maven
+# jars, so it needs the matching JDK 25 (from dnf). Build backend is Maven
 # (hence `maven` in the DNF list); `uv` is installed because the project's setup
 # helper expects it.
 # Best-effort: if the build can't fetch its deps, MCP is simply absent (see
@@ -110,10 +110,12 @@ rm -rf /tmp/pycdc
 # opencv-python-headless: pixel-diff a screenshot against a reconstruction.
 # pefile/lief: parse PE sections/resources (Delphi .dfm forms + strings live in
 # resources and point at event handlers -> good entry points). capstone: quick
-# disassembly without Ghidra.
+# disassembly without Ghidra. unicorn: CPU emulation of single functions.
+# scipy: numeric analysis next to numpy. pyinstxtractor-ng: unfreeze-python.sh.
 pip install --break-system-packages \
     numpy pillow matplotlib opencv-python-headless \
-    pefile capstone lief pyinstxtractor-ng unicorn || true
+    pefile capstone lief pyinstxtractor-ng unicorn \
+    scipy || true
 
 # =============================================================================
 # GUI decompile tools (for the VNC desktop). Best-effort: a changed URL won't
@@ -137,7 +139,7 @@ pip install --break-system-packages \
   printf '#!/bin/sh\nexec /opt/ImHex.AppImage --appimage-extract-and-run "$@"\n' > /usr/local/bin/imhex
   chmod +x /usr/local/bin/imhex ) || echo "WARN: ImHex not installed"
 
-# jadx-gui — Java/APK decompiler GUI (uses our JDK 25).
+# jadx-gui — Java/APK decompiler GUI (uses the system JDK 25).
 ( JZ="$(ls "$VENDOR"/jadx-*.zip 2>/dev/null | head -n1 || true)"
   [[ -n "$JZ" ]] && cp "$JZ" /tmp/jadx.zip \
     || dl "$(gh_asset skylot/jadx 'jadx-[0-9][^"]*\.zip')" /tmp/jadx.zip
@@ -151,11 +153,28 @@ pip install --break-system-packages \
 # desktop. Edit on the host against the bind-mounted project for a full IDE.
 
 # ILSpy GUI (.NET): no clean Linux package. Primary .NET path is ilspycmd (above)
-# + viewing the decompiled C# project in VSCodium. See GUI-TOOLS.md to build
-# AvaloniaILSpy from source if you want the GUI.
+# + viewing the decompiled C# project in Geany or on the host.
 
 # --- Ghidra post-scripts: point scriptPath at the ctx copy (no duplication) --
 ln -sfn "$CTX/scripts" /opt/scripts
+
+# --- Mermaid for the re-doc skill (offline architecture pages) -----------------
+# ~3.5 MB, so it is fetched here instead of living in the repository. The version
+# and checksum are pinned; on any failure the file is left out and archdoc.py
+# falls back to the CDN link (the page then needs internet access).
+MERMAID_VER=11.17.2
+MERMAID_SHA=581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8
+MERMAID_DIR="$CTX/init/skills/re-doc/vendor"
+if [ -d "$MERMAID_DIR" ] && [ ! -f "$MERMAID_DIR/mermaid.min.js" ]; then
+    if curl -fsSL "https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VER}/dist/mermaid.min.js" -o /tmp/mermaid.min.js \
+       && echo "${MERMAID_SHA}  /tmp/mermaid.min.js" | sha256sum -c - >/dev/null 2>&1; then
+        mv /tmp/mermaid.min.js "$MERMAID_DIR/mermaid.min.js"
+        curl -fsSL "https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VER}/LICENSE" -o "$MERMAID_DIR/LICENSE-mermaid.txt" || true
+    else
+        echo "WARN: mermaid ${MERMAID_VER} not downloaded or checksum mismatch; architecture pages will use the CDN" >&2
+        rm -f /tmp/mermaid.min.js
+    fi
+fi
 
 # --- OUR scripts: symlink from /opt/ctx into /usr/local/bin (no copying) ------
 # Force +x on the executables (COPY preserves source mode, which may be 0644;

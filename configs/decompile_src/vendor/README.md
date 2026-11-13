@@ -4,7 +4,7 @@
 download from the official sources at build time.
 
 - `ghidra_*_PUBLIC_*.zip` — a Ghidra release zip. Used instead of the GitHub
-  release. Runs on the private /opt/jdk21 installed by setup-root.sh.
+  release. Runs on the system JDK 25 (java-25-openjdk from dnf).
 - `pycdc/` — a local checkout of https://github.com/zrax/pycdc (built here).
 - `dotnet/` — a pre-extracted .NET SDK dir (copied to /opt/dotnet). Advanced;
   normally the .NET install script from dot.net is fine.

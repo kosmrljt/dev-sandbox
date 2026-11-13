@@ -58,14 +58,15 @@ try:
             "Addresses are ground truth; names may be auto-generated.\n\n")
 
     for func in prog.getFunctionManager().getFunctions(True):
-        if name_filter and name_filter not in func.getName():
+        full = func.getName(True)
+        if name_filter and name_filter not in full:
             continue
 
-        f.write("## %s  @ %s\n\n" % (func.getName(), func.getEntryPoint()))
+        f.write("## %s  @ %s\n\n" % (full, func.getEntryPoint()))
         f.write("Signature: `%s`\n\n" % func.getSignature())
 
-        callers = sorted(set(c.getName() for c in func.getCallingFunctions(monitor)))
-        callees = sorted(set(c.getName() for c in func.getCalledFunctions(monitor)))
+        callers = sorted(set(c.getName(True) for c in func.getCallingFunctions(monitor)))
+        callees = sorted(set(c.getName(True) for c in func.getCalledFunctions(monitor)))
         f.write("Called by: %s\n\n" % (", ".join(callers) or "(no known callers)"))
         f.write("Calls: %s\n\n" % (", ".join(callees) or "(no calls)"))
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # decompile-init - scaffold a reverse-engineering project in the current dir.
 # Usage:
-#   decompile-init          CLAUDE.md (agent rules) + review/
-#   decompile-init --mcp    also .mcp.json + .claude/settings.json (live MCP loop)
+#   decompile-init          CLAUDE.md, review/, .claude/skills/, .claude/settings.json
+#   decompile-init --mcp    also .mcp.json + Ghidra read permissions (live MCP loop)
+#   decompile-init --migrate  move skills renamed in a newer version to .claude/skills-old/
 #   decompile-init <dir>    target a specific directory instead of "."
 #   decompile-init --help
 #
@@ -13,12 +14,14 @@ set -euo pipefail
 INIT="${DECOMPILE_INIT:-/opt/ctx/init}"
 GUIDE="${DECOMPILE_DOC:-/opt/ctx/docs}/GUIDE.md"
 WANT_MCP=0
+MIGRATE=0
 TARGET="."
 
 for a in "$@"; do
     case "$a" in
         --mcp)     WANT_MCP=1 ;;
-        -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --migrate) MIGRATE=1 ;;
+        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)        echo "unknown option: $a" >&2; exit 2 ;;
         *)         TARGET="$a" ;;
     esac
@@ -29,18 +32,96 @@ if [[ ! -d "$INIT" ]]; then
     exit 1
 fi
 
-mkdir -p "$TARGET"
-# cp -n never clobbers a file you already edited.
-cp -n "$INIT/CLAUDE.md" "$TARGET/" 2>/dev/null && echo "+ CLAUDE.md" || echo "= CLAUDE.md (exists, kept)"
+mkdir -p "$TARGET/.claude"
+
+# put <template> <relative destination>: copy unless the file is already there.
+# A file you already have is never overwritten.
+put() {
+    if [[ -e "$TARGET/$2" ]]; then
+        echo "= $2 (exists, kept)"
+    else
+        cp "$1" "$TARGET/$2" && echo "+ $2"
+    fi
+}
+
+put "$INIT/CLAUDE.md" CLAUDE.md
+
+# Permissions: read-only RE tools (file, rabin2, readelf, objdump, strings and
+# the export scripts) run without a prompt. Running the analyzed program, gdb,
+# strace/ltrace and anything that changes files still asks.
+put "$INIT/claude-settings.json" .claude/settings.json
 
 if [[ "$WANT_MCP" == 1 ]]; then
-    cp -n "$INIT/.mcp.json" "$TARGET/" 2>/dev/null && echo "+ .mcp.json" || echo "= .mcp.json (exists, kept)"
-    mkdir -p "$TARGET/.claude"
-    cp -n "$INIT/claude-settings.json" "$TARGET/.claude/settings.json" 2>/dev/null \
-        && echo "+ .claude/settings.json" || echo "= .claude/settings.json (exists, kept)"
+    put "$INIT/.mcp.json" .mcp.json
+    # Add the Ghidra MCP read permissions to settings.json. Additive only: entries
+    # you already have (and anything else in the file) stay untouched.
+    python3 - "$TARGET/.claude/settings.json" "$INIT/claude-settings-mcp.json" <<'PY' || echo "! .claude/settings.json: could not add the Ghidra permissions (see above)"
+import json, sys
+dst, src = sys.argv[1], sys.argv[2]
+try:
+    cur = json.load(open(dst, encoding="utf-8"))
+except ValueError as e:
+    sys.exit("  %s is not valid JSON (%s); left unchanged" % (dst, e))
+allow = cur.setdefault("permissions", {}).setdefault("allow", [])
+new = [a for a in json.load(open(src, encoding="utf-8"))["permissions"]["allow"] if a not in allow]
+if new:
+    allow.extend(new)
+    with open(dst, "w", encoding="utf-8") as f:
+        json.dump(cur, f, indent=2)
+        f.write("\n")
+    print("+ .claude/settings.json: added %d Ghidra MCP read permissions" % len(new))
+else:
+    print("= .claude/settings.json (Ghidra MCP read permissions already there)")
+PY
 fi
 
 mkdir -p "$TARGET/review"
+
+# Project skills (/re-explain, /re-map, ...): copy each skill folder that is not
+# there yet. Two sources: the ones shipped with the image, and your own in
+# $DECOMPILE_SKILLS_EXTRA (default ~/.config/decompile/skills, a persistent volume).
+EXTRA="${DECOMPILE_SKILLS_EXTRA:-$HOME/.config/decompile/skills}"
+for src in "$INIT/skills" "$EXTRA"; do
+    [[ -d "$src" ]] || continue
+    mkdir -p "$TARGET/.claude/skills"
+    for d in "$src"/*/; do
+        [[ -d "$d" ]] || continue
+        n="$(basename "$d")"
+        if [[ -e "$TARGET/.claude/skills/$n" ]]; then
+            echo "= .claude/skills/$n (exists, kept)"
+        else
+            cp -a "$d" "$TARGET/.claude/skills/$n" && echo "+ .claude/skills/$n"
+        fi
+    done
+done
+
+# Skills that were renamed: old-name:new-name. A project set up with an older
+# version still has the old folder, so both would show up in the / menu.
+RENAMED=(archmap:re-map archdoc:re-doc explain:re-explain)
+stale=()
+for pair in "${RENAMED[@]}"; do
+    old="${pair%%:*}"; new="${pair##*:}"
+    [[ -d "$TARGET/.claude/skills/$old" ]] || continue
+    if [[ "$MIGRATE" == 1 ]]; then
+        if [[ ! -d "$TARGET/.claude/skills/$new" ]]; then
+            echo "! .claude/skills/$old kept: its replacement $new is not installed"
+            continue
+        fi
+        dest="$TARGET/.claude/skills-old/$old"
+        [[ -e "$dest" ]] && dest="$dest.$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$TARGET/.claude/skills-old"
+        mv "$TARGET/.claude/skills/$old" "$dest" && echo "> .claude/skills/$old moved to ${dest#"$TARGET"/} (replaced by $new)"
+    else
+        stale+=("$old (now $new)")
+    fi
+done
+if (( ${#stale[@]} )); then
+    echo
+    echo "NOTE: skills from an older version are still in .claude/skills/:"
+    printf '        %s\n' "${stale[@]}"
+    echo "      Both names would appear in the / menu. Move the old ones away with:"
+    echo "        decompile-init --migrate${TARGET:+ $TARGET}"
+fi
 
 echo
 echo "Project ready in: $(cd "$TARGET" && pwd)"

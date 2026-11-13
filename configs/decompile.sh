@@ -11,6 +11,7 @@
 #     decompile_src/          <- source of truth (survives `clean`)
 #       setup-root.sh
 #       scripts/  (decompile-init, ghidra-mcp-up, td32-import, exportjson.sh, ...)
+#       init/     (CLAUDE.md, .mcp.json, skills/ - copied into a project by decompile-init)
 #       docs/  vendor/
 #
 # Use:    dev-sandbox --config decompile.sh
@@ -44,6 +45,7 @@ PROFILE_decompile_DNF=(
     libxkbcommon mesa-libGL mesa-libEGL libglvnd-opengl
     java-25-openjdk
     gdb upx innoextract unshield cabextract
+    patchelf
 )
 
 # ROOT stage (before USER dev) — installs the RE toolchain into the image, so a
