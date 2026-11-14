@@ -2,7 +2,7 @@
 name: re-map
 description: For a compiled binary without source code (Ghidra out.json) - build or refresh an interactive architecture map (map/index.html) of the binary being analyzed - modules, external resources, data flows, each marked confirmed or hypothesis with evidence. Use when the user asks for the program's architecture, structure, overview, module map or call graph.
 argument-hint: "[binary] [--refresh]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(ls *), Bash(file *)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-map/*), Bash(ls *), Bash(file *)
 ---
 
 # /re-map - architecture map of the analyzed binary
@@ -15,13 +15,17 @@ exactly in the schema below, grounded in evidence. Never write the HTML yourself
 
 ## Step 1 - Facts
 
-1. If `out.json` is missing or older than the binary, run
-   `exportjson.sh <binary> out.json` (binary = argument, else the only executable
-   in `target/`; if unsure, ask).
-2. Read `out.json` with `jq` or a short script, not by loading it whole: list function count,
-   entry points (`entry`, `main`, `WinMain`, exports), and per function the number
-   of callers, callees and strings.
-3. Read every file in `review/`. The user's notes win over your own reading.
+1. Find the binary: the argument if given, otherwise `outq target` (it may be in
+   `target/` or directly in the project directory). If that reports several
+   candidates and none was recorded by exportjson.sh, ask which one.
+   If `out.json` is missing or `outq info` says the binary is newer, run
+   `exportjson.sh <binary> out.json`.
+2. Query `out.json` with `outq`, never by loading it whole: `outq info` (counts,
+   real names or not, entry points), `outq ls` (callers, callees and strings per
+   function), `outq roots` (functions reached only through pointers).
+3. Read every card in `review/`. `## My notes` is the user's and wins over your own
+   reading; `## Analysis` is earlier analysis and counts as evidence only where it
+   cites its own.
 
 ## Step 2 - Decide what to leave out
 
@@ -108,7 +112,8 @@ Fix every problem `--check` reports and run it again. Do not edit `archmap.py`.
 ## Step 7 - Report (short)
 
 - Modules: how many confirmed, how many hypothesis.
-- Functions placed / not placed / skipped.
+- Functions placed / not placed: quote the counts line that `archmap.py` prints, do
+  not count by hand. "Skipped" groups are part of "not placed".
 - The 5 `next` functions, one line each.
 - Tell the user to open `map/index.html` on the host (the project folder is mounted).
 

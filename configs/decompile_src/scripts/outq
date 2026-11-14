@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""outq - ask questions of the Ghidra export (out.json) without loading it by hand.
+
+    outq info                    what is in the export, which binary it belongs to
+    outq target                  path of the analyzed binary (one line)
+    outq ls [REGEX]              functions: address, callers, callees, strings, name
+    outq roots                   functions nobody calls (entry points, callbacks, handlers)
+    outq show NAME [A:B]         one function: signature, callers, callees, strings,
+                                 pseudocode (optionally only lines A..B)
+    outq grep REGEX [NAME]       search pseudocode; prints  function:line: text
+    outq strings [REGEX]         referenced strings and the functions that use them
+    outq imports [REGEX]         external functions and who calls them
+
+Options:  -f FILE   export to read (default: out.json)
+          -a        ls/roots/grep: include thunks and externals
+          -n N      limit the number of rows printed (default 200, 0 = no limit)
+
+NAME is a function's full name, its short name, its address (hex), or any part
+of the name that matches exactly one function.
+
+Format of out.json: a JSON LIST with one object per function:
+    name        namespace-qualified name (Unit::Class::Method; <EXTERNAL>::printf)
+    short       name without the namespace
+    address     entry point, hex without 0x
+    signature   prototype as Ghidra shows it
+    is_thunk, is_external
+    callers, callees   lists of qualified names
+    strings     [{addr, type, value}]   strings the function references
+    data_refs   [{addr, type, value}]   other data it references
+    pseudocode  decompiled C (may be empty)
+"""
+
+import json
+import os
+import re
+import sys
+
+MAGIC = {b"\x7fELF": "ELF", b"MZ": "PE/MZ", b"\xca\xfe\xba\xbe": "Mach-O/Java",
+         b"\xcf\xfa\xed\xfe": "Mach-O", b"\xfe\xed\xfa\xcf": "Mach-O"}
+AUTO = re.compile(r"^(FUN|thunk_FUN|LAB|SUB)_[0-9a-fA-F]+$")
+ENTRY = ("entry", "_start", "start", "main", "WinMain", "wWinMain", "DllMain", "_DllMainCRTStartup")
+
+
+def die(msg):
+    sys.exit("outq: " + msg)
+
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        die("%s not found. Create it with:  exportjson.sh <binary> %s" % (path, path))
+    except ValueError as e:
+        die("%s is not valid JSON: %s" % (path, e))
+    if not isinstance(d, list):
+        die("%s: expected a JSON list of functions" % path)
+    for f in d:
+        f.setdefault("short", f.get("name", "").split("::")[-1])
+    return d
+
+
+def internal(f):
+    return not f.get("is_thunk") and not f.get("is_external")
+
+
+def find(funcs, key):
+    k = key.lower().removeprefix("0x")
+    for test in (lambda f: f["name"] == key, lambda f: f["short"] == key,
+                 lambda f: f.get("address", "").lower().lstrip("0") == k.lstrip("0") and k != "",
+                 lambda f: key.lower() in f["name"].lower()):
+        hits = [f for f in funcs if test(f)]
+        real = [f for f in hits if internal(f)] or hits
+        if len(real) == 1:
+            return real[0]
+        if len(real) > 1:
+            names = ", ".join("%s@%s" % (f["name"], f.get("address")) for f in real[:8])
+            die("'%s' matches %d functions: %s%s" % (key, len(real), names, " ..." if len(real) > 8 else ""))
+    die("no function matches '%s' (try: outq ls %s)" % (key, key))
+
+
+def looks_binary(path):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4)
+    except OSError:
+        return None
+    for m, kind in MAGIC.items():
+        if head.startswith(m):
+            return kind
+    return None
+
+
+def targets(export):
+    """Candidate binaries, best first: recorded by exportjson.sh, then files that
+    have a Ghidra project next to them, then target/, then the project dir."""
+    out, seen = [], set()
+
+    def add(p, why):
+        rp = os.path.realpath(p)
+        if rp not in seen and os.path.isfile(p) and looks_binary(p):
+            seen.add(rp)
+            out.append((p, looks_binary(p), why))
+
+    side = export + ".target"
+    if os.path.isfile(side):
+        with open(side, encoding="utf-8") as f:
+            line = f.readline().strip()
+        if line:
+            add(line, "recorded by exportjson.sh")
+    base = os.path.dirname(os.path.abspath(export))
+    for d in (base, os.path.join(base, "target")):
+        if not os.path.isdir(d):
+            continue
+        for n in sorted(os.listdir(d)):
+            p = os.path.join(d, n)
+            if os.path.isdir(p + "_ghidra"):
+                add(os.path.relpath(p), "has a Ghidra project next to it (%s_ghidra)" % n)
+    for d, why in ((os.path.join(base, "target"), "in target/"), (base, "in the project directory")):
+        if os.path.isdir(d):
+            for n in sorted(os.listdir(d)):
+                add(os.path.relpath(os.path.join(d, n)), why)
+    return out
+
+
+def cmd_target(funcs, a):
+    t = targets(a["file"])
+    if not t:
+        die("no binary found. Put it in target/ or name it explicitly.")
+    print(t[0][0])
+    if len(t) > 1 and t[0][2] != "recorded by exportjson.sh":
+        print("outq: %d candidates; taking the first. Others: %s"
+              % (len(t), ", ".join(x[0] for x in t[1:5])), file=sys.stderr)
+
+
+def cmd_info(funcs, a):
+    ins = [f for f in funcs if internal(f)]
+    auto = [f for f in ins if AUTO.match(f["short"])]
+    print("export     %s: %d functions (%d internal, %d thunks, %d external)"
+          % (a["file"], len(funcs), len(ins), sum(1 for f in funcs if f.get("is_thunk")),
+             sum(1 for f in funcs if f.get("is_external"))))
+    print("names      %d of %d internal functions have real names, %d are automatic (FUN_...)"
+          % (len(ins) - len(auto), len(ins), len(auto)))
+    if ins and len(auto) < len(ins):
+        print("           real names are already here: no need to extract symbols again")
+    print("qualified  %d names contain a namespace (::)" % sum(1 for f in ins if "::" in f["name"]))
+    ent = [f for f in ins if f["short"] in ENTRY]
+    print("entry      " + (", ".join("%s @ 0x%s" % (f["name"], f.get("address")) for f in ent) or "(none of %s found; see: outq roots)" % "/".join(ENTRY[:5])))
+    print("pseudocode %d internal functions have it, %d are empty"
+          % (sum(1 for f in ins if f.get("pseudocode")), sum(1 for f in ins if not f.get("pseudocode"))))
+    t = targets(a["file"])
+    if not t:
+        print("binary     not found (expected in target/ or next to out.json)")
+    for i, (p, kind, why) in enumerate(t[:5]):
+        note = ""
+        try:
+            if os.path.getmtime(p) > os.path.getmtime(a["file"]):
+                note = "   NEWER than the export: run exportjson.sh again"
+        except OSError:
+            pass
+        print("%s %s  (%s; %s)%s" % ("binary    " if i == 0 else "   also   ", p, kind, why, note))
+    big = sorted(ins, key=lambda f: -len(f.get("pseudocode") or ""))[:5]
+    print("largest    " + ", ".join("%s (%d lines)" % (f["short"], (f.get("pseudocode") or "").count("\n") + 1) for f in big))
+
+
+def rows(funcs, a, items, fmt):
+    lim = a["limit"]
+    for i, it in enumerate(items):
+        if lim and i >= lim:
+            print("... %d more (use -n 0 for all, or a narrower pattern)" % (len(items) - lim))
+            break
+        print(fmt(it))
+
+
+def line_of(f):
+    return "%s  %3d in %3d out %3d str  %s%s" % (
+        f.get("address", "?"), len(f.get("callers", [])), len(f.get("callees", [])),
+        len(f.get("strings", [])), f["name"],
+        "  [thunk]" if f.get("is_thunk") else "  [external]" if f.get("is_external") else "")
+
+
+def cmd_ls(funcs, a):
+    pat = re.compile(a["args"][0], re.I) if a["args"] else None
+    sel = [f for f in funcs if (a["all"] or internal(f)) and (not pat or pat.search(f["name"]))]
+    print("address   callers callees strings  name   (%d functions)" % len(sel))
+    rows(funcs, a, sorted(sel, key=lambda f: f.get("address", "")), line_of)
+
+
+def cmd_roots(funcs, a):
+    sel = [f for f in funcs if (a["all"] or internal(f)) and not f.get("callers")]
+    print("functions without callers: %d. Entry points, plus code reached through" % len(sel))
+    print("function pointers (callbacks, signal handlers, dispatch tables, vtables).")
+    rows(funcs, a, sorted(sel, key=lambda f: -len(f.get("callees", []))), line_of)
+
+
+def cmd_show(funcs, a):
+    if not a["args"]:
+        die("show needs a function name or address")
+    f = find(funcs, a["args"][0])
+    code = (f.get("pseudocode") or "").split("\n")
+    rng = None
+    if len(a["args"]) > 1:
+        m = re.fullmatch(r"(\d*):(\d*)", a["args"][1])
+        if not m:
+            die("line range must look like 120:180")
+        rng = (int(m.group(1) or 1), int(m.group(2) or len(code)))
+    if rng is None:
+        print("name       %s" % f["name"])
+        print("address    0x%s" % f.get("address"))
+        print("signature  %s" % f.get("signature"))
+        for key in ("callers", "callees"):
+            v = f.get(key, [])
+            print("%-10s %d%s" % (key, len(v), ": " + ", ".join(v) if v else ""))
+        for s in f.get("strings", []):
+            print("string     0x%s  %r" % (s.get("addr"), s.get("value")))
+        for s in f.get("data_refs", [])[:40]:
+            print("data       0x%s  %s = %s" % (s.get("addr"), s.get("type"), s.get("value")))
+        print("pseudocode %d lines%s" % (len(code), "" if len(code) <= 400 else
+                                          "  (long: narrow with  outq show %s 1:200  or  outq grep REGEX %s)" % (f["short"], f["short"])))
+        rng = (1, len(code))
+    for i in range(rng[0], min(rng[1], len(code)) + 1):
+        print("%5d  %s" % (i, code[i - 1]))
+
+
+def cmd_grep(funcs, a):
+    if not a["args"]:
+        die("grep needs a regular expression")
+    pat = re.compile(a["args"][0])
+    sel = [find(funcs, a["args"][1])] if len(a["args"]) > 1 else [f for f in funcs if a["all"] or internal(f)]
+    hits = []
+    for f in sel:
+        for i, line in enumerate((f.get("pseudocode") or "").split("\n"), 1):
+            if pat.search(line):
+                hits.append("%s:%d: %s" % (f["name"], i, line.strip()))
+    rows(funcs, a, hits, str)
+    if not hits:
+        print("no match")
+
+
+def cmd_strings(funcs, a):
+    pat = re.compile(a["args"][0], re.I) if a["args"] else None
+    by = {}
+    for f in funcs:
+        for s in f.get("strings", []):
+            v = s.get("value")
+            if v and (not pat or pat.search(v)):
+                by.setdefault((s.get("addr"), v), []).append(f["name"])
+    items = sorted(by.items())
+    rows(funcs, a, items, lambda it: "0x%s  %r   <- %s" % (it[0][0], it[0][1], ", ".join(sorted(set(it[1])))))
+    if not items:
+        print("no match")
+
+
+def cmd_imports(funcs, a):
+    pat = re.compile(a["args"][0], re.I) if a["args"] else None
+    ext = {f["name"] for f in funcs if f.get("is_external") or f.get("is_thunk")}
+    by = {}
+    for f in funcs:
+        if not internal(f):
+            continue
+        for c in f.get("callees", []):
+            if c in ext or c.startswith("<EXTERNAL>::"):
+                by.setdefault(c.split("::")[-1], set()).add(f["name"])
+    items = sorted((k, v) for k, v in by.items() if not pat or pat.search(k))
+    rows(funcs, a, items, lambda it: "%-28s <- %s" % (it[0], ", ".join(sorted(it[1])[:8]) + (" ..." if len(it[1]) > 8 else "")))
+    if not items:
+        print("no match")
+
+
+CMDS = {"info": cmd_info, "target": cmd_target, "ls": cmd_ls, "roots": cmd_roots, "show": cmd_show,
+        "grep": cmd_grep, "strings": cmd_strings, "imports": cmd_imports}
+
+
+def main():
+    argv = sys.argv[1:]
+    a = {"file": "out.json", "all": False, "limit": 200, "args": []}
+    cmd = None
+    i = 0
+    while i < len(argv):
+        x = argv[i]
+        if x in ("-h", "--help"):
+            print(__doc__)
+            return
+        if x == "-f":
+            i += 1
+            a["file"] = argv[i] if i < len(argv) else die("-f needs a file")
+        elif x == "-n":
+            i += 1
+            a["limit"] = int(argv[i]) if i < len(argv) and argv[i].isdigit() else die("-n needs a number")
+        elif x == "-a":
+            a["all"] = True
+        elif cmd is None:
+            cmd = x
+        else:
+            a["args"].append(x)
+        i += 1
+    if cmd is None:
+        print(__doc__)
+        return
+    if cmd not in CMDS:
+        die("unknown command '%s' (commands: %s)" % (cmd, ", ".join(CMDS)))
+    funcs = [] if cmd == "target" and not os.path.isfile(a["file"]) else load(a["file"])
+    try:
+        CMDS[cmd](funcs, a)
+    except re.error as e:
+        die("bad regular expression: %s" % e)
+    except BrokenPipeError:
+        pass
+
+
+if __name__ == "__main__":
+    main()

@@ -2,13 +2,13 @@
 name: re-doc
 description: For a compiled binary without source code - write or update ARCHITECTURE.md - a high-level, evidence-backed description of how the analyzed program is built and how it runs (context, archetype, components, runtime, data), with Mermaid diagrams as support. Use when the user asks how the program works overall, its architecture, design, structure or components.
 argument-hint: "[binary] [--refresh] [--lang sl|en]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(contextpack.sh *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(rabin2 *), Bash(readelf *), Bash(file *), Bash(ls *)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(contextpack.sh *), Bash(outq *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-doc/*), Bash(rabin2 *), Bash(readelf *), Bash(file *), Bash(ls *)
 ---
 
 # /re-doc - how the analyzed binary is built
 
 Arguments: `$ARGUMENTS`
-- binary path (optional; default: the only executable in `target/`, ask if unsure)
+- binary path (optional; default: what `outq target` prints, see Step 1)
 - `--refresh`: update the existing ARCHITECTURE.md from new evidence, keep the rest
 - `--lang sl|en`: language of the prose (default `en`). Section numbers stay the same.
 
@@ -22,7 +22,7 @@ addresses appear only as evidence and as entry points for drilling down.
   xrefs/values you cite) or **[H]** hypothesis. When in doubt, [H].
 - Evidence is concrete: `` `FUN_00402210` @ 0x00402210 references "scores.dat" ``,
   `import USER32!GetMessageA`, `review/save_scores.md`, `TD32 Unit1::TMainForm`.
-- The user's notes in `review/` win over your own reading. Never contradict them
+- The user's notes (`## My notes` in the `review/` cards, NOTES.md) win over your own reading. Never contradict them
   silently; if you disagree, say so under section 8.
 - Diagrams support the text; every diagram is followed by 1 to 3 sentences that say
   what it shows. Max ~12 boxes per diagram; put detail in the text.
@@ -30,11 +30,19 @@ addresses appear only as evidence and as entry points for drilling down.
 
 ## Step 1 - Facts (cheap, broad)
 
+Find the binary: the argument if given, otherwise `outq target` (it may be in
+`target/` or directly in the project directory). If that reports several
+candidates and none was recorded by exportjson.sh, ask which one.
+
 1. `file`, `rabin2 -I`, `rabin2 -i` (imports), `rabin2 -S` (sections),
    `rabin2 -U` for PE resources, or `readelf -d -S` for ELF.
-2. `out.json`: run `exportjson.sh <binary> out.json` if missing or older than the
-   binary. Inspect it with a short script (counts, entry points, top callers,
-   functions referencing interesting strings or imports). Never read it whole.
+2. `out.json`: run `exportjson.sh <binary> out.json` if it is missing or
+   `outq info` says the binary is newer. Query it with `outq`, never by loading
+   it whole: `outq info`, `outq roots` (hand-off candidates: handlers and
+   callbacks have no direct callers), `outq imports`, `outq strings <regex>`,
+   `outq show <name> [from:to]`, `outq grep <regex> [name]`.
+   If `outq info` reports real names, they are already in the export; do not
+   extract symbols from the binary again.
 3. Read `review/*.md` and, if present, `map/modules.json` from `/re-map`.
 
 ## Step 2 - Archetype first

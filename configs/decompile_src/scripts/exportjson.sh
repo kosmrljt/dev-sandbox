@@ -20,6 +20,10 @@ export GHIDRA_INSTALL_DIR="${GHIDRA_INSTALL_DIR:-${GHIDRA_HOME:-/opt/ghidra}}"
 echo "== Exporting program to JSON (PyGhidra headless) =="
 pyghidra "$BIN" /opt/scripts/ExportJson.py "$OUT"
 
+# Remember which binary this export belongs to, so `outq target` and the skills
+# find it wherever it lives (target/, the project dir, or elsewhere).
+realpath --relative-to="$(dirname "$OUT")" "$BIN" > "$OUT.target" 2>/dev/null || echo "$BIN" > "$OUT.target"
+
 echo
 echo "== Done: $OUT =="
-echo "Next: analyze.py --in $OUT --seed main --depth 2   (needs ANTHROPIC_API_KEY)"
+echo "Next: outq -f $OUT info      (what is in the export; outq --help for more)"

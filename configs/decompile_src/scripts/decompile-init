@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # decompile-init - scaffold a reverse-engineering project in the current dir.
 # Usage:
-#   decompile-init          CLAUDE.md, review/, .claude/skills/, .claude/settings.json
+#   decompile-init          CLAUDE.md, NOTES.md, review/, .claude/skills/, .claude/settings.json
 #   decompile-init --mcp    also .mcp.json + Ghidra read permissions (live MCP loop)
 #   decompile-init --migrate  move skills renamed in a newer version to .claude/skills-old/
 #   decompile-init <dir>    target a specific directory instead of "."
@@ -76,6 +76,7 @@ PY
 fi
 
 mkdir -p "$TARGET/review"
+put "$INIT/NOTES.md" NOTES.md
 
 # Project skills (/re-explain, /re-map, ...): copy each skill folder that is not
 # there yet. Two sources: the ones shipped with the image, and your own in

@@ -28,6 +28,8 @@ REQUIRED = {1: "Short answer", 2: "How it works", 3: "Why it is built this way",
 RESULTS = ("verified", "refuted", "unverified")
 CITE = re.compile(r"\[(C\d+)\]")
 EMPTY = ("", "-", "...", "todo", "n/a", "none")
+REVIEW_ONLY = re.compile(r"^\W*(independent |fresh |second |sub-?agent )*(review|reviewer|sub-?agent)"
+                         r"( (pending|result|check|confirmed|agreed|held|ok))*\W*$", re.I)
 
 
 def sections(text):
@@ -50,8 +52,13 @@ def claims_table(body):
     for line in body.splitlines():
         if not line.strip().startswith("|"):
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        # split on table pipes only: an escaped pipe (\|) is text inside a cell
+        cells = [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
         if len(cells) < 5 or not re.fullmatch(r"C\d+", cells[0]):
+            continue
+        if len(cells) > 5:
+            rows[cells[0]] = {"claim": cells[1], "evidence": cells[2], "check": cells[3],
+                              "result": "", "cols": len(cells)}
             continue
         rows[cells[0]] = {"claim": cells[1], "evidence": cells[2], "check": cells[3],
                           "result": cells[4].lower().strip("`* ")}
@@ -60,6 +67,13 @@ def claims_table(body):
 
 def check_rows(claims, errs):
     for cid, c in claims.items():
+        if c.get("cols"):
+            errs.append("%s: the row has %d cells instead of 5; a '|' inside a cell must be "
+                        "written as \\| " % (cid, c["cols"]))
+            continue
+        if REVIEW_ONLY.match(c["check"]) and c["result"] == "verified":
+            errs.append("%s: the check names only the independent review; 'verified' needs a "
+                        "check of your own as well" % cid)
         if c["result"] not in RESULTS:
             errs.append("%s: result '%s' must be one of %s" % (cid, c["result"], RESULTS))
         if c["evidence"].lower() in EMPTY:
