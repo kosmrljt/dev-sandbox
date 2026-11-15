@@ -1,230 +1,301 @@
 #!/usr/bin/env bash
-# setup-root.sh — runs as ROOT during the profile build (dev-sandbox TOOLS stage).
-# Installs the RE toolchain into the IMAGE, so a rebuild refreshes it. Volumes hold
-# only user state (Claude login, caches, XFCE/VNC config).
-#
-# Design:
-#   - Downloaded/compiled tools (JDK, Ghidra, .NET, pycdc, GUI apps) -> /opt + a
-#     symlink in /usr/local/bin (on PATH for dev; no PATH editing needed).
-#   - OUR scripts are NOT copied: they live in /opt/ctx (COPYed by the Dockerfile)
-#     and we just symlink them into /usr/local/bin. Single source, no duplication.
-#   - Java comes from dnf (java-25-openjdk in PROFILE_decompile_DNF), not from this
-#     script: current Ghidra (12.2+) is compiled to Java 25 bytecode and refuses to
-#     start on older JDKs.
-#
-# OFFLINE option: drop installers into ./vendor and they're used instead of
-# downloading (see vendor/README.md). GUI-app installs are best-effort (|| true):
-# a changed URL never hard-fails the build; look for a WARN line in the build log.
+# ==============================================================================
+# setup-root.sh — Installs the Reverse Engineering toolchain (runs as ROOT)
+# ==============================================================================
+# Architecture:
+#   - Binaries & tools (Ghidra, .NET, pycdc, GUI apps) -> /opt + symlink in /usr/local/bin
+#   - Project scripts -> stay in /opt/ctx (symlinked to /usr/local/bin, no duplication)
+#   - Java 25 -> provided via DNF (required by Ghidra 12.2+)
+#   - Offline support -> place installers in ./vendor to skip downloads
+#   - GUI apps -> best-effort (|| true); URL failures only trigger a warning
+# ==============================================================================
 
-set -euxo pipefail
+set -euo pipefail
 
-#settign for tempporaray files
+# --- Temporary Home & Pip Configuration ---------------------------------------
+# Redirects all caches (.cache/pip, .cache/uv, .m2, .nuget, .dotnet) into /tmp
+# so they can be wiped at the end of the container RUN layer.
 export HOME=/tmp/root-home
 mkdir -p "$HOME"
 export PIP_BREAK_SYSTEM_PACKAGES=1
 
-CTX=/opt/ctx                 # where the Dockerfile COPYed this directory
+CTX=/opt/ctx
 VENDOR="$CTX/vendor"
 mkdir -p /usr/local/bin /usr/share/applications
 
-dl() {  # dl <url> <out> — download helper (proxy-friendly curl)
+# --- Colored Logging Helpers --------------------------------------------------
+C_RESET='\033[0m'
+C_BOLD='\033[1m'
+C_BLUE='\033[1;34m'
+C_CYAN='\033[1;36m'
+C_GREEN='\033[1;32m'
+C_YELLOW='\033[1;33m'
+
+log_section() { printf "\n${C_BLUE}======================================================================${C_RESET}\n${C_CYAN}  ==> %s${C_RESET}\n${C_BLUE}======================================================================${C_RESET}\n" "$1"; }
+log_info()    { printf "${C_BOLD}  [i]${C_RESET} %s\n" "$1"; }
+log_ok()      { printf "${C_GREEN}  [✓] %s${C_RESET}\n" "$1"; }
+log_warn()    { printf "${C_YELLOW}  [!] WARN: %s${C_RESET}\n" "$1" >&2; }
+
+# --- Download Helpers ---------------------------------------------------------
+dl() {
+    log_info "Downloading: $1"
     curl -fsSL -o "$2" "$1"
 }
-gh_asset() {  # gh_asset <owner/repo> <regex> — print first matching asset URL of latest release
+
+gh_asset() {
     curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
         | grep -o "https://[^\"]*$2" | head -n1
 }
 
 
-# --- Ghidra ------------------------------------------------------------------
-# Pinning: set GHIDRA_URL (a release .zip) and GHIDRA_SHA256 to build the same
-# Ghidra every time; without them the latest release is taken (and the GhidraMCP
-# plugin below is built against whatever that is).
+# ==============================================================================
+# [1/9] Ghidra & PyGhidra
+# ==============================================================================
+# Set GHIDRA_URL and GHIDRA_SHA256 to pin a specific version, otherwise the
+# latest release is fetched automatically.
+log_section "[1/9] Installing Ghidra & PyGhidra"
+
 GHIDRA_URL="${GHIDRA_URL:-}"
 GHIDRA_SHA256="${GHIDRA_SHA256:-}"
 GHIDRA_ZIP="$(ls "$VENDOR"/ghidra_*_PUBLIC_*.zip 2>/dev/null | head -n1 || true)"
-if [[ -n "$GHIDRA_ZIP" ]]; then echo "Using local Ghidra: $GHIDRA_ZIP"; cp "$GHIDRA_ZIP" /tmp/ghidra.zip
-elif [[ -n "$GHIDRA_URL" ]]; then dl "$GHIDRA_URL" /tmp/ghidra.zip
-else dl "$(gh_asset NationalSecurityAgency/ghidra 'ghidra_[^"]*_PUBLIC_[^"]*\.zip')" /tmp/ghidra.zip; fi
-if [[ -n "$GHIDRA_SHA256" ]]; then echo "$GHIDRA_SHA256  /tmp/ghidra.zip" | sha256sum -c -; fi
+
+if [[ -n "$GHIDRA_ZIP" ]]; then
+    log_info "Using local Ghidra archive: $GHIDRA_ZIP"
+    cp "$GHIDRA_ZIP" /tmp/ghidra.zip
+elif [[ -n "$GHIDRA_URL" ]]; then
+    dl "$GHIDRA_URL" /tmp/ghidra.zip
+else
+    dl "$(gh_asset NationalSecurityAgency/ghidra 'ghidra_[^"]*_PUBLIC_[^"]*\.zip')" /tmp/ghidra.zip
+fi
+
+if [[ -n "$GHIDRA_SHA256" ]]; then
+    log_info "Verifying Ghidra SHA256 checksum..."
+    echo "$GHIDRA_SHA256  /tmp/ghidra.zip" | sha256sum -c -
+fi
+
+log_info "Extracting Ghidra to /opt/ghidra..."
 unzip -q /tmp/ghidra.zip -d /opt
 mv /opt/ghidra_*_PUBLIC /opt/ghidra
 rm /tmp/ghidra.zip
 ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless
 ln -sf /opt/ghidra/ghidraRun /usr/local/bin/ghidraRun
+log_ok "Ghidra installed"
 
-# PyGhidra: Ghidra 12.x removed Jython, so Python GhidraScripts (ExportJson.py,
-# DecompileAll.py, ContextPack.py) only run via PyGhidra. Install the pip package
-# that ships WITH this Ghidra (version-matched, offline from the bundled dist);
-# fall back to PyPI. The `pyghidra` launcher this provides imports+analyzes a
-# binary and runs a .py script against it (our wrappers use it instead of
-# analyzeHeadless, whose headless mode cannot start PyGhidra).
+# Ghidra 12.x replaced Jython with PyGhidra. Prefer the bundled wheel to match versions.
+log_info "Installing PyGhidra launcher..."
 PYG_DIST="$(ls -d /opt/ghidra/Ghidra/Features/PyGhidra/pypkg/dist 2>/dev/null | head -n1 || true)"
 if [[ -n "$PYG_DIST" ]]; then
-    pip install --break-system-packages --no-index -f "$PYG_DIST" pyghidra \
-        || pip install --break-system-packages pyghidra
+    pip install --no-index -f "$PYG_DIST" pyghidra || pip install pyghidra
 else
-    pip install --break-system-packages pyghidra
+    pip install pyghidra
 fi
-# Not best-effort: without pyghidra no export script works, so the build stops here.
+log_ok "PyGhidra installed"
 
-# --- .NET SDK + ilspycmd (C# CLI decompiler) ---------------------------------
+
+# ==============================================================================
+# [2/9] .NET SDK & ilspycmd (C# CLI Decompiler)
+# ==============================================================================
+log_section "[2/9] Installing .NET SDK & ilspycmd"
+
 export DOTNET_ROOT=/opt/dotnet
-if [[ -d "$VENDOR/dotnet" ]]; then echo "Using local .NET SDK"; cp -a "$VENDOR/dotnet" /opt/dotnet
-else dl https://dot.net/v1/dotnet-install.sh /tmp/dotnet-install.sh
-     bash /tmp/dotnet-install.sh --channel LTS --install-dir /opt/dotnet; rm /tmp/dotnet-install.sh; fi
+if [[ -d "$VENDOR/dotnet" ]]; then
+    log_info "Using local .NET SDK from vendor/"
+    cp -a "$VENDOR/dotnet" /opt/dotnet
+else
+    dl https://dot.net/v1/dotnet-install.sh /tmp/dotnet-install.sh
+    bash /tmp/dotnet-install.sh --channel LTS --install-dir /opt/dotnet
+    rm /tmp/dotnet-install.sh
+fi
+
+log_info "Installing ilspycmd tool..."
 /opt/dotnet/dotnet tool install ilspycmd --tool-path /opt/dotnet-tools
 ln -sf /opt/dotnet/dotnet /usr/local/bin/dotnet
 ln -sf /opt/dotnet-tools/ilspycmd /usr/local/bin/ilspycmd
+log_ok ".NET SDK & ilspycmd installed"
 
-# --- pycdc / pycdas (.pyc decompiler) ----------------------------------------
-if [[ -d "$VENDOR/pycdc" ]]; then echo "Using local pycdc"; cp -a "$VENDOR/pycdc" /tmp/pycdc
-else git clone --depth 1 https://github.com/zrax/pycdc /tmp/pycdc; fi
+
+# ==============================================================================
+# [3/9] pycdc / pycdas (Python Bytecode Decompiler)
+# ==============================================================================
+log_section "[3/9] Building pycdc / pycdas (.pyc decompiler)"
+
+if [[ -d "$VENDOR/pycdc" ]]; then
+    log_info "Using local pycdc source from vendor/"
+    cp -a "$VENDOR/pycdc" /tmp/pycdc
+else
+    log_info "Cloning pycdc repository..."
+    git clone --depth 1 https://github.com/zrax/pycdc /tmp/pycdc
+fi
+
 cmake -S /tmp/pycdc -B /tmp/pycdc/build
 cmake --build /tmp/pycdc/build -j"$(nproc)"
 install -m755 /tmp/pycdc/build/pycdc  /usr/local/bin/pycdc
 install -m755 /tmp/pycdc/build/pycdas /usr/local/bin/pycdas
 rm -rf /tmp/pycdc
+log_ok "pycdc & pycdas built and installed"
 
-# --- GhidraMCP (bethington fork): rich data-type tools + matching bridge ------
-# We use bethington/ghidra-mcp rather than upstream LaurieWired because it adds
-# the data-type tools the native-code rebuild loop needs: create_struct,
-# create_union, create_enum, add/modify/remove_struct_field, apply_data_type,
-# create_typedef, set_function_prototype, and so on.
-#
-# Two parts, both from the SAME source checkout so plugin and bridge share one
-# protocol version:
-#   (a) the Ghidra PLUGIN (Java extension) -> serves REST on http://127.0.0.1:8089
-#   (b) the BRIDGE `bridge-mcp-ghidra` (stdio MCP server) that Claude Code launches
-#
-# The plugin is version-locked to Ghidra, so we build it from source against the
-# installed Ghidra (the release fetched above). It compiles against that Ghidra's
-# jars, so it needs the matching JDK 25 (from dnf). Build backend is Maven
-# (hence `maven` in the DNF list); `uv` is installed because the project's setup
-# helper expects it.
-# Best-effort: if the build can't fetch its deps, MCP is simply absent (see
-# docs/GUIDE.md to build it by hand).
-# Pinning: set GHIDRA_MCP_REF to a commit or tag. This is third-party code that is
-# built as root and runs as an MCP server with write access to Ghidra; without a
-# pin the build takes whatever is on the default branch that day.
+
+# ==============================================================================
+# [4/9] GhidraMCP (bethington fork)
+# ==============================================================================
+# Provides rich data-type manipulation tools (structs, unions, enums, prototypes).
+# Builds both from the same checkout to keep protocol versions in sync:
+#   1. Java Ghidra Extension (REST server on 127.0.0.1:8089)
+#   2. Python stdio MCP bridge (`bridge-mcp-ghidra`) for Claude Code
+# Pin via GHIDRA_MCP_REF (commit/tag) if needed. Best-effort install.
+log_section "[4/9] Building GhidraMCP Extension & Bridge"
+
 GHIDRA_MCP_REF="${GHIDRA_MCP_REF:-}"
-( pip install --break-system-packages uv || true
-  if [[ -n "$GHIDRA_MCP_REF" ]]; then
-      git clone https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
-      git -C /tmp/ghidra-mcp-b checkout --detach "$GHIDRA_MCP_REF"
-  else
-      git clone --depth 1 https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
-  fi
-  cd /tmp/ghidra-mcp-b
-  # Copy the installed Ghidra's jars into ~/.m2 (local, no network), then build.
-  python3 -m tools.setup ensure-prereqs --ghidra-path /opt/ghidra
-  python3 -m tools.setup build
-  # Install the built extension system-wide so Ghidra lists it under Extensions.
-  unzip -q -o target/GhidraMCP-*.zip -d /opt/ghidra/Ghidra/Extensions
-  # Install the matching Python bridge -> `bridge-mcp-ghidra` on PATH.
-  pip install --break-system-packages .
-  cd / && rm -rf /tmp/ghidra-mcp-b
-  echo "GhidraMCP (bethington) installed: extension + bridge-mcp-ghidra" ) \
-  || echo "WARN: GhidraMCP (bethington) not installed - see docs/GUIDE.md to build it manually"
+(
+    pip install uv || true
+    if [[ -n "$GHIDRA_MCP_REF" ]]; then
+        log_info "Cloning bethington/ghidra-mcp (pinned to $GHIDRA_MCP_REF)..."
+        git clone https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
+        git -C /tmp/ghidra-mcp-b checkout --detach "$GHIDRA_MCP_REF"
+    else
+        log_info "Cloning bethington/ghidra-mcp (latest)..."
+        git clone --depth 1 https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
+    fi
+    cd /tmp/ghidra-mcp-b
+    log_info "Setting up Ghidra JAR dependencies & compiling plugin with Maven..."
+    python3 -m tools.setup ensure-prereqs --ghidra-path /opt/ghidra
+    python3 -m tools.setup build
+    unzip -q -o target/GhidraMCP-*.zip -d /opt/ghidra/Ghidra/Extensions
+    log_info "Installing Python MCP bridge..."
+    pip install .
+    cd / && rm -rf /tmp/ghidra-mcp-b
+    log_ok "GhidraMCP installed (Java extension + bridge-mcp-ghidra)"
+) || log_warn "GhidraMCP not installed — see docs/GUIDE.md to build manually"
 
-# --- Python analysis libraries (used by helper scripts in work/) --------------
-# numpy/scipy/matplotlib: numeric analysis and plots of extracted data.
-# pillow/opencv-python-headless: image handling and comparison (e.g. output vs. original).
-# duckdb: `outq sql` (SQL over the exports) and tables in work/ (CSV, Parquet).
-# pefile/lief: parse PE sections/resources (Delphi .dfm forms + strings live in
-# resources and point at event handlers -> good entry points). capstone: quick
-# disassembly without Ghidra. unicorn: CPU emulation of single functions.
-# scipy: numeric analysis next to numpy. pyinstxtractor-ng: unfreeze-python.sh.
-pip install --break-system-packages \
+
+# ==============================================================================
+# [5/9] Python Analysis Libraries
+# ==============================================================================
+# - numpy / scipy / matplotlib : numeric analysis & plotting
+# - pillow / opencv-headless   : image processing & visual diffing
+# - pefile / lief              : PE headers, sections & Delphi .dfm resource parsing
+# - capstone / unicorn         : fast disassembly & single-function CPU emulation
+# - pyinstxtractor-ng          : PyInstaller unpacking (unfreeze-python.sh)
+# - duckdb                     : required by `outq sql` for querying exports/Parquet/CSV
+log_section "[5/9] Installing Python RE & Analysis Libraries"
+
+log_info "Installing scientific & binary analysis packages..."
+pip install \
     numpy pillow matplotlib opencv-python-headless \
     pefile capstone lief pyinstxtractor-ng unicorn \
-    scipy || true
-pip install --break-system-packages duckdb   # outq sql needs it: not best-effort
+    scipy || log_warn "Some optional Python analysis libraries failed to install"
 
-# --- yq (mikefarah, v4): reads and writes decompile.yaml, keeping comments ------
-# Not the Fedora/Debian "yq" package: that is a different tool (a jq wrapper)
-# with another syntax that drops comments when it writes. Pinned with a checksum.
+log_info "Installing DuckDB (required for outq sql)..."
+pip install duckdb
+log_ok "Python analysis libraries installed"
+
+
+# ==============================================================================
+# [6/9] yq v4 (mikefarah)
+# ==============================================================================
+# Standalone Go binary that preserves YAML comments when editing decompile.yaml
+# (unlike the distro jq-wrapper package).
+log_section "[6/9] Installing yq (YAML Processor)"
+
 YQ_VER=v4.44.3
 YQ_SHA=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
-if [[ -f "$VENDOR/yq_linux_amd64" ]]; then cp "$VENDOR/yq_linux_amd64" /tmp/yq
-else dl "https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64" /tmp/yq; fi
+if [[ -f "$VENDOR/yq_linux_amd64" ]]; then
+    log_info "Using local yq from vendor/"
+    cp "$VENDOR/yq_linux_amd64" /tmp/yq
+else
+    dl "https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64" /tmp/yq
+fi
 echo "${YQ_SHA}  /tmp/yq" | sha256sum -c -
 install -m755 /tmp/yq /usr/local/bin/yq && rm -f /tmp/yq
+log_ok "yq ${YQ_VER} installed"
 
-# =============================================================================
-# GUI decompile tools (for the VNC desktop). Best-effort: a changed URL won't
-# fail the build. jadx-gui (Java) is clean; Cutter/ImHex use AppImages; .NET has
-# no clean Linux GUI, so ilspycmd (CLI) + Geany is the primary .NET path.
-# =============================================================================
 
-# Cutter — radare2 GUI (native). AppImage, run with extract-and-run (no FUSE).
-( CUT="$(ls "$VENDOR"/Cutter-*.AppImage 2>/dev/null | head -n1 || true)"
-  [[ -n "$CUT" ]] && cp "$CUT" /opt/Cutter.AppImage \
-    || dl "$(gh_asset rizinorg/cutter 'Cutter-[^"]*Linux-x86_64\.AppImage')" /opt/Cutter.AppImage
-  chmod +x /opt/Cutter.AppImage
-  printf '#!/bin/sh\nexec /opt/Cutter.AppImage --appimage-extract-and-run "$@"\n' > /usr/local/bin/cutter
-  chmod +x /usr/local/bin/cutter ) || echo "WARN: Cutter not installed"
+# ==============================================================================
+# [7/9] GUI Reverse Engineering Tools (VNC Desktop)
+# ==============================================================================
+# Best-effort installs. AppImages use --appimage-extract-and-run (no FUSE needed).
+# Note: Geany (GTK) is installed via DNF as the lightweight VNC editor.
+log_section "[7/9] Installing GUI Tools (Cutter, ImHex, jadx)"
 
-# ImHex — hex editor for RE (native). AppImage, extract-and-run.
-( IMH="$(ls "$VENDOR"/imhex-*.AppImage 2>/dev/null | head -n1 || true)"
-  [[ -n "$IMH" ]] && cp "$IMH" /opt/ImHex.AppImage \
-    || dl "$(gh_asset WerWolv/ImHex 'imhex-[^"]*x86_64\.AppImage')" /opt/ImHex.AppImage
-  chmod +x /opt/ImHex.AppImage
-  printf '#!/bin/sh\nexec /opt/ImHex.AppImage --appimage-extract-and-run "$@"\n' > /usr/local/bin/imhex
-  chmod +x /usr/local/bin/imhex ) || echo "WARN: ImHex not installed"
+# --- Cutter (Rizin/radare2 GUI) ---
+(
+    log_info "Installing Cutter..."
+    CUT="$(ls "$VENDOR"/Cutter-*.AppImage 2>/dev/null | head -n1 || true)"
+    [[ -n "$CUT" ]] && cp "$CUT" /opt/Cutter.AppImage \
+        || dl "$(gh_asset rizinorg/cutter 'Cutter-[^"]*Linux-x86_64\.AppImage')" /opt/Cutter.AppImage
+    chmod +x /opt/Cutter.AppImage
+    printf '#!/bin/sh\nexec /opt/Cutter.AppImage --appimage-extract-and-run "$@"\n' > /usr/local/bin/cutter
+    chmod +x /usr/local/bin/cutter
+    log_ok "Cutter installed"
+) || log_warn "Cutter not installed"
 
-# jadx-gui — Java/APK decompiler GUI (uses the system JDK 25).
-( JZ="$(ls "$VENDOR"/jadx-*.zip 2>/dev/null | head -n1 || true)"
-  [[ -n "$JZ" ]] && cp "$JZ" /tmp/jadx.zip \
-    || dl "$(gh_asset skylot/jadx 'jadx-[0-9][^"]*\.zip')" /tmp/jadx.zip
-  mkdir -p /opt/jadx && unzip -q /tmp/jadx.zip -d /opt/jadx && rm /tmp/jadx.zip
-  ln -sf /opt/jadx/bin/jadx     /usr/local/bin/jadx
-  ln -sf /opt/jadx/bin/jadx-gui /usr/local/bin/jadx-gui ) || echo "WARN: jadx not installed"
+# --- ImHex (Hex Editor) ---
+(
+    log_info "Installing ImHex..."
+    IMH="$(ls "$VENDOR"/imhex-*.AppImage 2>/dev/null | head -n1 || true)"
+    [[ -n "$IMH" ]] && cp "$IMH" /opt/ImHex.AppImage \
+        || dl "$(gh_asset WerWolv/ImHex 'imhex-[^"]*x86_64\.AppImage')" /opt/ImHex.AppImage
+    chmod +x /opt/ImHex.AppImage
+    printf '#!/bin/sh\nexec /opt/ImHex.AppImage --appimage-extract-and-run "$@"\n' > /usr/local/bin/imhex
+    chmod +x /usr/local/bin/imhex
+    log_ok "ImHex installed"
+) || log_warn "ImHex not installed"
 
-# Editor: Geany (from dnf, in PROFILE_decompile_DNF) — lightweight, GTK, stable
-# under VNC. VSCode/VSCodium (Electron) is intentionally NOT installed: under VNC
-# in a container it needs --no-sandbox/--disable-gpu and still tends to crash the
-# desktop. Edit on the host against the bind-mounted project for a full IDE.
+# --- jadx-gui (Java/APK Decompiler) ---
+(
+    log_info "Installing jadx..."
+    JZ="$(ls "$VENDOR"/jadx-*.zip 2>/dev/null | head -n1 || true)"
+    [[ -n "$JZ" ]] && cp "$JZ" /tmp/jadx.zip \
+        || dl "$(gh_asset skylot/jadx 'jadx-[0-9][^"]*\.zip')" /tmp/jadx.zip
+    mkdir -p /opt/jadx && unzip -q /tmp/jadx.zip -d /opt/jadx && rm /tmp/jadx.zip
+    ln -sf /opt/jadx/bin/jadx     /usr/local/bin/jadx
+    ln -sf /opt/jadx/bin/jadx-gui /usr/local/bin/jadx-gui
+    log_ok "jadx & jadx-gui installed"
+) || log_warn "jadx not installed"
 
-# ILSpy GUI (.NET): no clean Linux package. Primary .NET path is ilspycmd (above)
-# + viewing the decompiled C# project in Geany or on the host.
 
-# --- Ghidra post-scripts: point scriptPath at the ctx copy (no duplication) --
-ln -sfn "$CTX/scripts" /opt/scripts
+# ==============================================================================
+# [8/9] Mermaid.js (Offline Architecture Diagrams)
+# ==============================================================================
+log_section "[8/9] Fetching Mermaid.js for Offline Docs"
 
-# --- Mermaid for the re-doc skill (offline architecture pages) -----------------
-# ~3.5 MB, so it is fetched here instead of living in the repository. The version
-# and checksum are pinned; on any failure the file is left out and archdoc.py
-# falls back to the CDN link (the page then needs internet access).
 MERMAID_VER=11.17.2
 MERMAID_SHA=581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8
 MERMAID_DIR="$CTX/init/skills/re-doc/vendor"
+
 if [ -d "$MERMAID_DIR" ] && [ ! -f "$MERMAID_DIR/mermaid.min.js" ]; then
     if curl -fsSL "https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VER}/dist/mermaid.min.js" -o /tmp/mermaid.min.js \
        && echo "${MERMAID_SHA}  /tmp/mermaid.min.js" | sha256sum -c - >/dev/null 2>&1; then
         mv /tmp/mermaid.min.js "$MERMAID_DIR/mermaid.min.js"
         curl -fsSL "https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VER}/LICENSE" -o "$MERMAID_DIR/LICENSE-mermaid.txt" || true
+        log_ok "Mermaid ${MERMAID_VER} cached for offline use"
     else
-        echo "WARN: mermaid ${MERMAID_VER} not downloaded or checksum mismatch; architecture pages will use the CDN" >&2
+        log_warn "Mermaid ${MERMAID_VER} download/checksum failed; archdoc.py will fall back to CDN"
         rm -f /tmp/mermaid.min.js
     fi
+else
+    log_info "Mermaid directory not present or file already exists — skipping"
 fi
 
-# --- OUR scripts: symlink from /opt/ctx into /usr/local/bin (no copying) ------
-# Force +x on the executables (COPY preserves source mode, which may be 0644;
-# `chmod -R a+rX` would NOT add x to a non-executable file, so set it explicitly).
+
+# ==============================================================================
+# [9/9] Symlinks, Desktop Launchers & Cleanup
+# ==============================================================================
+log_section "[9/9] Wiring Scripts & XFCE Desktop Launchers"
+
+# Point Ghidra post-scripts to /opt/ctx/scripts
+ln -sfn "$CTX/scripts" /opt/scripts
+
+# Ensure executable permissions and symlink all helper scripts into PATH
 chmod -R a+rX "$CTX"
-# Every file in scripts/ (decompile-init, ghidra-mcp-up, td32-import and the
-# extension-less ghidra-bg included) becomes a command on PATH.
 chmod 0755 "$CTX"/scripts/* 2>/dev/null || true
 for s in "$CTX"/scripts/*; do
     [ -f "$s" ] && ln -sf "$s" "/usr/local/bin/$(basename "$s")"
 done
-# decompile-init reads its starter files straight from the ctx docs copy.
-# (its DOC default is /opt/ctx/docs — no /usr/local/share copy needed)
+log_ok "Helper scripts symlinked from $CTX/scripts to /usr/local/bin"
 
-# --- Desktop launchers (system-wide; appear in the XFCE menu) -----------------
-mk_desktop() {  # mk_desktop <name> <exec> <comment>
+# Create XFCE application menu entries (GTK/icon caches are auto-handled by RPM triggers)
+mk_desktop() {
     cat > "/usr/share/applications/$1.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -240,20 +311,12 @@ mk_desktop Ghidra  /usr/local/bin/ghidraRun "Software reverse engineering suite"
 mk_desktop Cutter  /usr/local/bin/cutter    "radare2 GUI"
 mk_desktop ImHex   /usr/local/bin/imhex     "Hex editor for reverse engineers"
 mk_desktop jadx    /usr/local/bin/jadx-gui  "Java/APK decompiler"
-# Geany ships its own /usr/share/applications/geany.desktop from dnf.
+log_ok "XFCE desktop launchers created"
 
-# --- GTK/desktop caches: handled by RPM file triggers, NOT by hand ------------
-# The dnf packages (gdk-pixbuf2, shared-mime-info, hicolor-icon-theme, glib2,
-# desktop-file-utils) ship %transfiletriggerin triggers that rebuild
-# loaders.cache / mime.cache / icon caches / gschemas.compiled on install.
-# Verified by A/B test: built automatically, so we do NOT run them here.
-#
-# Fedora 44: there is no gdk-pixbuf SVG loader anymore (librsvg2 dropped it;
-# GTK4 uses glycin, GTK3 falls back to PNG icons). Rebuilding the pixbuf cache
-# would register no SVG loader regardless, so there is nothing to do.
-#
-# The earlier "Wnck Bail out" desktop crash was NOT a missing loader: it was a
-# full /tmp (a small RAM tmpfs) failing a pixbuf-cache write ("No space left on
-# device"). Fixed by keeping /tmp disk-backed - see PROFILE_decompile_PODMAN_ARGS.
+# Wipe temporary home and caches if not already handled by caller
+log_info "Cleaning up temporary build files in /tmp..."
+rm -rf /tmp/* /tmp/.[!.]* 2>/dev/null || true
 
-echo "setup-root.sh done - toolchain in the image, scripts symlinked from /opt/ctx."
+printf "\n${C_GREEN}======================================================================${C_RESET}\n"
+printf "${C_GREEN}  [✓] setup-root.sh complete — RE toolchain ready!${C_RESET}\n"
+printf "${C_GREEN}======================================================================${C_RESET}\n\n"
