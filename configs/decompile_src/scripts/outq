@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""outq - ask questions of the Ghidra export (out.json) without loading it by hand.
+"""outq - ask questions of the Ghidra export without loading it by hand.
 
     outq info                    what is in the export, which binary it belongs to
     outq target                  path of the analyzed binary (one line)
+    outq path [--all]            the export file (--all: "id<TAB>file" for every binary)
+    outq id                      id of the binary the commands work on
     outq ls [REGEX]              functions: address, callers, callees, strings, name
     outq roots                   functions nobody calls (entry points, callbacks, handlers)
     outq show NAME [A:B]         one function: signature, callers, callees, strings,
@@ -10,10 +12,27 @@
     outq grep REGEX [NAME]       search pseudocode; prints  function:line: text
     outq strings [REGEX]         referenced strings and the functions that use them
     outq imports [REGEX]         external functions and who calls them
+    outq sql "QUERY"             anything else, in SQL (DuckDB). Tables over the exports
+                                 of ALL binaries in decompile.yaml:
+                                   functions  (bin, name, short, address, signature,
+                                               is_thunk, is_external, callers, callees,
+                                               strings, data_refs, pseudocode)
+                                   calls      (bin, src, dst)
+                                   strings    (bin, function, addr, value)
+                                 Macros from tools/queries.sql are loaded first.
+    outq selftest                run the examples in tools/queries.sql
 
-Options:  -f FILE   export to read (default: out.json)
+Options:  -b ID     binary from decompile.yaml (default: its "current")
+          -f FILE   export file to read (overrides -b; without decompile.yaml: out.json)
           -a        ls/roots/grep: include thunks and externals
-          -n N      limit the number of rows printed (default 200, 0 = no limit)
+          -n N      limit rows printed (default 200, 0 = no limit); for show without
+                    a range: lines of pseudocode (default 150)
+
+Saved queries (tools/queries.sql): DuckDB macros, each with a comment that
+says what it does and an example line starting with "-- Example:", e.g.
+    -- Callers of a function, transitively, up to a depth.
+    -- Example: SELECT * FROM callers_deep('app', 'FUN_00401a30', 3);
+    CREATE OR REPLACE MACRO callers_deep(b, f, d) AS TABLE ...;
 
 NAME is a function's full name, its short name, its address (hex), or any part
 of the name that matches exactly one function.
@@ -33,7 +52,11 @@ Format of out.json: a JSON LIST with one object per function:
 import json
 import os
 import re
+import subprocess
 import sys
+
+CFG = "decompile.yaml"
+QUERIES = os.path.join("tools", "queries.sql")
 
 MAGIC = {b"\x7fELF": "ELF", b"MZ": "PE/MZ", b"\xca\xfe\xba\xbe": "Mach-O/Java",
          b"\xcf\xfa\xed\xfe": "Mach-O", b"\xfe\xed\xfa\xcf": "Mach-O"}
@@ -50,7 +73,7 @@ def load(path):
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
     except FileNotFoundError:
-        die("%s not found. Create it with:  exportjson.sh <binary> %s" % (path, path))
+        die("%s not found. Create it with:  exportjson.sh <id>   (or re init <binary>)" % path)
     except ValueError as e:
         die("%s is not valid JSON: %s" % (path, e))
     if not isinstance(d, list):
@@ -58,6 +81,43 @@ def load(path):
     for f in d:
         f.setdefault("short", f.get("name", "").split("::")[-1])
     return d
+
+
+def project():
+    """decompile.yaml as a dict (through yq), or None when there is none."""
+    if not os.path.isfile(CFG):
+        return None
+    try:
+        r = subprocess.run([os.environ.get("YQ", "yq"), "-o=json", ".", CFG],
+                           capture_output=True, text=True, timeout=20)
+    except FileNotFoundError:
+        die("yq not found; it is needed to read %s" % CFG)
+    if r.returncode != 0:
+        die("%s is not valid YAML: %s" % (CFG, r.stderr.strip()))
+    return json.loads(r.stdout or "{}") or {}
+
+
+def export_file(cfg, bid):
+    b = (cfg.get("binaries") or {}).get(bid) or {}
+    return b.get("out_json") or "out.%s.json" % bid
+
+
+def select(a):
+    """Fill a["file"] and a["bin"] from -f / -b / decompile.yaml."""
+    cfg = project()
+    a["cfg"] = cfg
+    if a["file"]:
+        a["explicit_file"] = True
+        return
+    if cfg is None:
+        a["file"], a["bin"] = "out.json", None
+        return
+    bid = a.get("bin") or cfg.get("current")
+    if not bid:
+        die("no current binary in %s (re use <id>)" % CFG)
+    if bid not in (cfg.get("binaries") or {}):
+        die("no binary '%s' in %s (binaries: %s)" % (bid, CFG, ", ".join(cfg.get("binaries") or {})))
+    a["bin"], a["file"] = bid, export_file(cfg, bid)
 
 
 def internal(f):
@@ -102,6 +162,15 @@ def targets(export):
             seen.add(rp)
             out.append((p, looks_binary(p), why))
 
+    cfg = project()
+    if cfg:
+        # With decompile.yaml its entry is the answer: no header check, no search.
+        for bid, b in (cfg.get("binaries") or {}).items():
+            if export_file(cfg, bid) == export and b.get("path"):
+                p = b["path"]
+                return [(p, looks_binary(p) or b.get("type") or "?", "from %s (%s)%s"
+                         % (CFG, bid, "" if os.path.isfile(p) else "; FILE MISSING"))]
+    # Without decompile.yaml: what exportjson.sh recorded, then guesses.
     side = export + ".target"
     if os.path.isfile(side):
         with open(side, encoding="utf-8") as f:
@@ -128,7 +197,7 @@ def cmd_target(funcs, a):
     if not t:
         die("no binary found. Put it in target/ or name it explicitly.")
     print(t[0][0])
-    if len(t) > 1 and t[0][2] != "recorded by exportjson.sh":
+    if len(t) > 1 and not t[0][2].startswith(("recorded by", "from " + CFG)):
         print("outq: %d candidates; taking the first. Others: %s"
               % (len(t), ", ".join(x[0] for x in t[1:5])), file=sys.stderr)
 
@@ -215,9 +284,11 @@ def cmd_show(funcs, a):
             print("string     0x%s  %r" % (s.get("addr"), s.get("value")))
         for s in f.get("data_refs", [])[:40]:
             print("data       0x%s  %s = %s" % (s.get("addr"), s.get("type"), s.get("value")))
-        print("pseudocode %d lines%s" % (len(code), "" if len(code) <= 400 else
-                                          "  (long: narrow with  outq show %s 1:200  or  outq grep REGEX %s)" % (f["short"], f["short"])))
-        rng = (1, len(code))
+        cap = a["show"]
+        print("pseudocode %d lines%s" % (len(code), "" if not cap or len(code) <= cap else
+                                          "  (first %d shown; more:  outq show %s %d:%d  or  outq grep REGEX %s)"
+                                          % (cap, f["short"], cap + 1, min(len(code), 2 * cap), f["short"])))
+        rng = (1, len(code) if not cap else min(len(code), cap))
     for i in range(rng[0], min(rng[1], len(code)) + 1):
         print("%5d  %s" % (i, code[i - 1]))
 
@@ -254,12 +325,13 @@ def cmd_strings(funcs, a):
 def cmd_imports(funcs, a):
     pat = re.compile(a["args"][0], re.I) if a["args"] else None
     ext = {f["name"] for f in funcs if f.get("is_external") or f.get("is_thunk")}
+    defined = {f["name"] for f in funcs if internal(f)}
     by = {}
     for f in funcs:
         if not internal(f):
             continue
         for c in f.get("callees", []):
-            if c in ext or c.startswith("<EXTERNAL>::"):
+            if c in ext or c.startswith("<EXTERNAL>::") or c not in defined:
                 by.setdefault(c.split("::")[-1], set()).add(f["name"])
     items = sorted((k, v) for k, v in by.items() if not pat or pat.search(k))
     rows(funcs, a, items, lambda it: "%-28s <- %s" % (it[0], ", ".join(sorted(it[1])[:8]) + (" ..." if len(it[1]) > 8 else "")))
@@ -267,13 +339,139 @@ def cmd_imports(funcs, a):
         print("no match")
 
 
+def cmd_path(funcs, a):
+    if "--all" in a["args"]:
+        cfg = a["cfg"] or {}
+        for bid in (cfg.get("binaries") or {}):
+            print("%s\t%s" % (bid, export_file(cfg, bid)))
+        if not cfg:
+            print("-\t%s" % a["file"])
+        return
+    print(a["file"])
+
+
+def cmd_id(funcs, a):
+    if not a["bin"]:
+        die("no decompile.yaml here (or -f given): no binary id")
+    print(a["bin"])
+
+
+def sql_connect(a):
+    try:
+        import duckdb
+    except ImportError:
+        die("the duckdb Python module is missing (pip install duckdb)")
+    con = duckdb.connect()
+    cfg = a["cfg"]
+    if cfg and not a.get("explicit_file"):
+        pairs = [(bid, export_file(cfg, bid)) for bid in (cfg.get("binaries") or {})]
+    else:
+        label = a.get("bin")
+        if not label and cfg:
+            label = next((bid for bid in (cfg.get("binaries") or {}) if export_file(cfg, bid) == a["file"]), None)
+        pairs = [(label or os.path.splitext(os.path.basename(a["file"]))[0], a["file"])]
+    for b, f in pairs:
+        if not os.path.isfile(f):
+            print("outq: %s: no export (%s), left out of the tables" % (b, f), file=sys.stderr)
+    pairs = [(b, f) for b, f in pairs if os.path.isfile(f)]
+    if not pairs:
+        die("no export found (exportjson.sh <id>)")
+    sel = " UNION ALL BY NAME ".join(
+        "SELECT '%s' AS bin, * FROM read_json('%s', format='array', maximum_object_size=1073741824, "
+        "columns={name:'VARCHAR', short:'VARCHAR', address:'VARCHAR', signature:'VARCHAR', "
+        "is_thunk:'BOOLEAN', is_external:'BOOLEAN', callers:'VARCHAR[]', callees:'VARCHAR[]', "
+        "strings:'STRUCT(addr VARCHAR, type VARCHAR, value VARCHAR)[]', "
+        "data_refs:'STRUCT(addr VARCHAR, type VARCHAR, value VARCHAR, label VARCHAR)[]', pseudocode:'VARCHAR'})"
+        % (b.replace("'", "''"), f.replace("'", "''")) for b, f in pairs)
+    con.execute("CREATE TABLE functions AS " + sel)
+    con.execute("CREATE VIEW calls AS SELECT bin, name AS src, unnest(callees) AS dst FROM functions")
+    con.execute("CREATE VIEW strings AS SELECT bin, name AS function, s.addr AS addr, s.value AS value "
+                "FROM (SELECT bin, name, unnest(strings) AS s FROM functions)")
+    # From here on: no files except reading and writing under work/. outq runs
+    # without asking, so a query must not be able to change NOTES.md,
+    # decompile.yaml or anything else. Cannot be switched back in this connection.
+    con.execute("SET allowed_directories=['%s']" % os.path.abspath("work").replace("'", "''"))
+    con.execute("SET enable_external_access=false")
+    if os.path.isfile(QUERIES):
+        with open(QUERIES, encoding="utf-8") as fh:
+            text = fh.read()
+        try:
+            con.execute(text)
+        except Exception as e:
+            die("%s: %s" % (QUERIES, e))
+    return con
+
+
+def print_rows(cur, lim):
+    cols = [d[0] for d in cur.description] if cur.description else []
+    rows_ = cur.fetchall()
+    if cols:
+        print("\t".join(cols))
+    for i, r in enumerate(rows_):
+        if lim and i >= lim:
+            print("... %d more rows (use -n 0 for all, or LIMIT)" % (len(rows_) - lim))
+            break
+        print("\t".join("" if v is None else str(v).replace("\n", "\\n") for v in r))
+    if not rows_:
+        print("(no rows)")
+
+
+def read_only(query):
+    """Only SELECT (WITH ... SELECT) and EXPLAIN; anything else is refused."""
+    import duckdb
+    try:
+        kinds = [st.type for st in duckdb.extract_statements(query)]
+    except Exception as e:
+        die("sql: %s" % e)
+    bad = [k for k in kinds if k not in (duckdb.StatementType.SELECT, duckdb.StatementType.EXPLAIN)]
+    if bad or not kinds:
+        die("sql: only SELECT and EXPLAIN are allowed here (got %s). Macros go into %s."
+            % (", ".join(str(k).split(".")[-1] for k in bad) or "nothing", QUERIES))
+
+
+def cmd_sql(funcs, a):
+    if not a["args"]:
+        die('sql needs a query, e.g.  outq sql "SELECT bin, count(*) FROM functions GROUP BY bin"')
+    query = " ".join(a["args"])
+    read_only(query)
+    con = sql_connect(a)
+    try:
+        print_rows(con.execute(query), a["limit"])
+    except Exception as e:
+        die("sql: %s" % e)
+
+
+def cmd_selftest(funcs, a):
+    if not os.path.isfile(QUERIES):
+        print("no %s: nothing to test" % QUERIES)
+        return
+    with open(QUERIES, encoding="utf-8") as fh:
+        examples = [m.group(1).strip() for m in re.finditer(r"^--\s*(?:Example|Primer):\s*(.+)$", fh.read(), re.M)]
+    con = sql_connect(a)
+    bad = 0
+    for ex in examples:
+        try:
+            read_only(ex)
+            con.execute(ex).fetchall()
+            print("ok    " + ex)
+        except Exception as e:
+            bad += 1
+            print("FAIL  %s\n      %s" % (ex, e))
+    print("%d example(s), %d failed" % (len(examples), bad))
+    if not examples:
+        print("add a line '-- Example: SELECT ...' above each macro in %s" % QUERIES)
+    sys.exit(1 if bad else 0)
+
+
 CMDS = {"info": cmd_info, "target": cmd_target, "ls": cmd_ls, "roots": cmd_roots, "show": cmd_show,
-        "grep": cmd_grep, "strings": cmd_strings, "imports": cmd_imports}
+        "grep": cmd_grep, "strings": cmd_strings, "imports": cmd_imports,
+        "path": cmd_path, "id": cmd_id, "sql": cmd_sql, "selftest": cmd_selftest}
+NO_LOAD = {"path", "id", "sql", "selftest"}
 
 
 def main():
     argv = sys.argv[1:]
-    a = {"file": "out.json", "all": False, "limit": 200, "args": []}
+    a = {"file": None, "bin": None, "all": False, "limit": 200, "show": 150, "args": []}
     cmd = None
     i = 0
     while i < len(argv):
@@ -284,9 +482,12 @@ def main():
         if x == "-f":
             i += 1
             a["file"] = argv[i] if i < len(argv) else die("-f needs a file")
+        elif x == "-b":
+            i += 1
+            a["bin"] = argv[i] if i < len(argv) else die("-b needs a binary id")
         elif x == "-n":
             i += 1
-            a["limit"] = int(argv[i]) if i < len(argv) and argv[i].isdigit() else die("-n needs a number")
+            a["limit"] = a["show"] = int(argv[i]) if i < len(argv) and argv[i].isdigit() else die("-n needs a number")
         elif x == "-a":
             a["all"] = True
         elif cmd is None:
@@ -299,7 +500,8 @@ def main():
         return
     if cmd not in CMDS:
         die("unknown command '%s' (commands: %s)" % (cmd, ", ".join(CMDS)))
-    funcs = [] if cmd == "target" and not os.path.isfile(a["file"]) else load(a["file"])
+    select(a)
+    funcs = [] if cmd in NO_LOAD or (cmd == "target" and not os.path.isfile(a["file"])) else load(a["file"])
     try:
         CMDS[cmd](funcs, a)
     except re.error as e:

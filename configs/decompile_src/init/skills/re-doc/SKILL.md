@@ -1,16 +1,20 @@
 ---
 name: re-doc
-description: For a compiled binary without source code - write or update ARCHITECTURE.md - a high-level, evidence-backed description of how the analyzed program is built and how it runs (context, archetype, components, runtime, data), with Mermaid diagrams as support. Use when the user asks how the program works overall, its architecture, design, structure or components.
-argument-hint: "[binary] [--refresh] [--lang sl|en]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(contextpack.sh *), Bash(outq *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-doc/*), Bash(rabin2 *), Bash(readelf *), Bash(file *), Bash(ls *)
+description: For a compiled binary without source code - write or update docs/ARCHITECTURE.md, a written, evidence-backed description of how the analyzed program is built and how it runs (context, archetype, components, runtime, data), with Mermaid diagrams. Use when the user wants the architecture as a document (write up, describe the whole program, update the architecture). For a quick question about how the program works answer in the chat; for a clickable map use /re-map.
+argument-hint: "[id] [--refresh] [--review] [--lang sl|en]"
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-doc/*), Bash(rabin2 *), Bash(readelf *), Bash(file *), Bash(ls *)
 ---
 
-# /re-doc - how the analyzed binary is built
+# /re-doc - how the analyzed program is built (docs/ARCHITECTURE.md)
 
 Arguments: `$ARGUMENTS`
-- binary path (optional; default: what `outq target` prints, see Step 1)
-- `--refresh`: update the existing ARCHITECTURE.md from new evidence, keep the rest
-- `--lang sl|en`: language of the prose (default `en`). Section numbers stay the same.
+- binary id from decompile.yaml (optional; default: `current`). The document
+  describes the program as a whole; with several binaries, components may span
+  them and evidence names the binary (`core: FUN_00402210 @ 0x00402210`).
+- `--refresh`: update the existing docs/ARCHITECTURE.md from new evidence, keep the rest
+- `--review`: independent review of every [C] claim by a fresh agent (Step 7)
+- `--lang sl|en`: language of the prose (default: `settings.lang_docs` in
+  decompile.yaml, else the language the user writes in). Section numbers stay the same.
 
 The reader wants to understand **how the program is built and how it runs**, not a
 list of functions. Write at the level of components and behaviour. Functions and
@@ -18,10 +22,11 @@ addresses appear only as evidence and as entry points for drilling down.
 
 ## Rules
 
-- Every claim carries a status: **[C]** confirmed (real names, review/ notes, or
-  xrefs/values you cite) or **[H]** hypothesis. When in doubt, [H].
+- Every claim carries a status: **[C]** confirmed (review/ cards, the user's notes, or
+  xrefs/values you cite) or **[H]** hypothesis. When in doubt, [H]. Names, also real
+  ones from debug info, identify a function; what it does comes from the code.
 - Evidence is concrete: `` `FUN_00402210` @ 0x00402210 references "scores.dat" ``,
-  `import USER32!GetMessageA`, `review/save_scores.md`, `TD32 Unit1::TMainForm`.
+  `import USER32!GetMessageA`, `review/app/save_scores.md`, `TD32 Unit1::TMainForm`.
 - The user's notes (`## My notes` in the `review/` cards, NOTES.md) win over your own reading. Never contradict them
   silently; if you disagree, say so under section 8.
 - Diagrams support the text; every diagram is followed by 1 to 3 sentences that say
@@ -30,20 +35,19 @@ addresses appear only as evidence and as entry points for drilling down.
 
 ## Step 1 - Facts (cheap, broad)
 
-Find the binary: the argument if given, otherwise `outq target` (it may be in
-`target/` or directly in the project directory). If that reports several
-candidates and none was recorded by exportjson.sh, ask which one.
+The binary: the id given, otherwise `current` (`re status` lists all, `re path <id>`
+gives the file).
 
 1. `file`, `rabin2 -I`, `rabin2 -i` (imports), `rabin2 -S` (sections),
    `rabin2 -U` for PE resources, or `readelf -d -S` for ELF.
-2. `out.json`: run `exportjson.sh <binary> out.json` if it is missing or
-   `outq info` says the binary is newer. Query it with `outq`, never by loading
-   it whole: `outq info`, `outq roots` (hand-off candidates: handlers and
-   callbacks have no direct callers), `outq imports`, `outq strings <regex>`,
-   `outq show <name> [from:to]`, `outq grep <regex> [name]`.
+2. The export: if `re status` says it is missing, run `exportjson.sh <id>`.
+   Query it with `outq -b <id>`, never by loading it whole: `info`, `roots`
+   (hand-off candidates: handlers and callbacks have no direct callers),
+   `imports`, `strings <regex>`, `show <name> [from:to]`, `grep <regex> [name]`.
+   Call chains, counts and calls between binaries: `outq sql "..."`.
    If `outq info` reports real names, they are already in the export; do not
    extract symbols from the binary again.
-3. Read `review/*.md` and, if present, `map/modules.json` from `/re-map`.
+3. Read the cards in `review/<id>/` and, if present, `docs/map/modules.json` from `/re-map`.
 
 ## Step 2 - Archetype first
 
@@ -62,8 +66,12 @@ Decide what kind of program this is, with evidence. Typical archetypes:
 | Shared library (.so / .dll) | no `main`; dynamic symbol table with exports, `DT_SONAME` | each exported function; callbacks it accepts; constructors (`.init_array`) |
 | Plugin / backend | one exported entry (`*_init`, `sane_*`, `gst_plugin_desc`), table of function pointers | the registered function table |
 
-Then find the **hand-off points**: where the framework or loop gives control to the
-program's own code. These are the doors to the components.
+Then find the **hand-off points**: where control enters the program's own code
+from the outside. For a program: where the framework or main loop calls it. For
+a library: every exported function, the callbacks it accepts, its constructors.
+`outq roots` lists the candidates. These are the doors to the components, and
+the description goes top-down from them: what each door offers first, how it is
+done second.
 
 For a library, the "context" (section 2) is its callers and what it reaches below
 (device, files, other libraries), and "runtime" (section 5) is the life cycle a caller
@@ -78,9 +86,9 @@ licensing, ...). For each component:
 - one-sentence responsibility,
 - how it works in 2 to 5 sentences (mechanism, not function lists),
 - entry points (function @ address), what it talks to, evidence, status.
-If `map/modules.json` exists, reuse its module ids (`re-map module: <id>`) so the
-text and the map tell the same story. Use `contextpack.sh` for the few functions you
-need to read closely.
+If `docs/map/modules.json` exists, reuse its module ids (`re-map module: <id>`) so the
+text and the map tell the same story. Read the few functions you need closely with
+`outq -b <id> show <name>`.
 
 ## Step 4 - Runtime
 
@@ -94,12 +102,12 @@ the user saves"). Each as a numbered list of steps with evidence, plus a Mermaid
 Central structures (name, size, known fields with offsets, who uses them) and file
 or wire formats (layout as a table: offset, size, meaning, evidence).
 
-## Step 6 - Write ARCHITECTURE.md in exactly this structure
+## Step 6 - Write docs/ARCHITECTURE.md in exactly this structure
 
 ~~~markdown
 # Architecture: <PROGRAM>
 
-Status: draft | Based on: out.json, <n> review notes, map/modules.json (yes/no) | Legend: [C] [H]
+Status: draft | Based on: out.<id>.json, <n> review cards, docs/map/modules.json (yes/no) | Legend: [C] [H]
 
 ## 1. Summary
 <3 to 5 sentences: what it is, archetype, main components, how it runs.>
@@ -121,8 +129,8 @@ flowchart LR
 Evidence:
 - ...
 
-| Hand-off point | Address | Dispatches to |
-| --- | --- | --- |
+| Hand-off point (API function, handler, callback) | Address | What it offers | Leads to component |
+| --- | --- | --- | --- |
 
 ## 4. Components
 ```mermaid
@@ -170,21 +178,28 @@ sequenceDiagram
 1. <function or question> - <why it matters for the architecture>
 ~~~
 
-## Step 7 - Independent review of confirmed claims
+## Step 7 - Second check of confirmed claims
 
 A wrong [C] in this document misleads all later work, so confirmed claims get a
-second opinion before the document is finished.
+second check before the document is finished.
+
+Without `--review` (and unless the user asked for an independent review): check every [C] claim of sections 3 and 4
+yourself with a check you have not used for it yet (another xref, the values in
+the binary, a second caller). Re-reading the same pseudocode does not count. A
+claim that fails becomes [H] with a row in section 8. Then go to Step 8.
+
+With `--review`:
 
 1. List every [C] claim from sections 3 to 6 as a table: ID (R1, R2, ...), the claim
    as one checkable sentence, its evidence, and the section it comes from.
 2. When the Agent/Task tool is available, give a fresh subagent only that table,
-   the binary path and `out.json`. It must not see ARCHITECTURE.md or your
-   reasoning. Ask it to try to refute each claim with its own check (xrefs and
-   values in `out.json`, `rabin2`/`readelf`, `contextpack.sh` on the cited function)
+   the binary path and the export file (`outq -b <id> path`). It must not see
+   docs/ARCHITECTURE.md or your reasoning. Ask it to try to refute each claim with
+   its own check (`outq -b <id> show`/`grep`/`sql`, `rabin2`/`readelf`)
    and to answer per claim: holds / refuted / cannot tell, with what it looked at.
    Without that tool, do the same yourself with a check you have not used yet;
    re-reading the same pseudocode does not count.
-3. Apply the results to ARCHITECTURE.md:
+3. Apply the results to docs/ARCHITECTURE.md:
    - holds: keep [C].
    - refuted: correct the text, and add a row to section 8 saying what was claimed,
      what is true, and how it was found.
@@ -196,7 +211,7 @@ second opinion before the document is finished.
 
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/archdoc.py --check     # structure, statuses, evidence, names
-python3 ${CLAUDE_SKILL_DIR}/archdoc.py --html      # writes map/architecture.html
+python3 ${CLAUDE_SKILL_DIR}/archdoc.py --html      # writes docs/map/architecture.html
 ```
 
 Fix every ERROR and re-run. Address WARNINGs or explain them in section 8.
@@ -204,9 +219,10 @@ Do not edit `archdoc.py`.
 
 ## Step 9 - Report (short)
 
-Archetype in one sentence; components with their status; the review result
+Archetype in one sentence; components with their status; the check result
 (how many [C] claims held, were corrected, were downgraded to [H]); the 3 most
-important open questions; tell the user to open `map/architecture.html` on the host.
+important open questions; tell the user to open `docs/map/architecture.html` on the host.
+Add a line to LOG.md.
 
-With `--refresh`: change only what new evidence or review/ notes justify, and list
+With `--refresh`: change only what new evidence or review/ cards justify, and list
 each change (section, old -> new, evidence) in the report.

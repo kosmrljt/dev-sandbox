@@ -51,12 +51,12 @@ PROFILE_decompile_DNF=(
 # ROOT stage (before USER dev) — installs the RE toolchain into the image, so a
 # rebuild refreshes it. Nothing is written to ~/.local at build.
 PROFILE_decompile_TOOLS=(
-    "bash /opt/ctx/setup-root.sh && rm -rf /tmp/*"
+    "bash /opt/ctx/setup-root.sh && rm -rf /tmp/* /tmp/.[!.]* "
 )
 
 # DEV stage (as dev) — Claude Code via its native installer into ~/.local/bin.
 PROFILE_decompile_AGENTS=(
-    "curl -fsSL https://claude.ai/install.sh | bash"
+    "curl -fsSL https://claude.ai/install.sh | bash && rm -rf /tmp/* /tmp/.[!.]* "
 )
 
 PROFILE_decompile_ENV=(

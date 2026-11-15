@@ -1,428 +1,319 @@
 Decompile sandbox: user guide
 =============================
 
-This sandbox helps you understand a compiled program when you do not have
-its source. You get Ghidra and other reverse-engineering tools, a few helper
-scripts, and Claude Code with ready-made commands ("skills").
+Helps you understand a compiled program without its source: Ghidra and other
+reverse-engineering tools, a few commands, and Claude Code with ready-made
+procedures (skills). One rule runs through everything: a claim needs evidence
+(an address, a value, a cross-reference); guesses are marked as such.
 
-One rule runs through everything: a claim needs evidence (an address, a
-value, a cross-reference). Guesses are kept apart and marked as such; see
-section 8. All tools are on the PATH.
-
-    1. Your first project            6. Delphi / C++Builder
-    2. What kind of file is it?      7. Native Linux binaries
-    3. Scripts                       8. The rule: evidence first
-    4. Skills                        9. If something goes wrong
-    5. Ghidra and the live loop
+    1. First project         5. Skills                 9. Evidence first
+    2. Project structure     6. Ghidra window         10. Upgrading a project
+    3. Kinds of files        7. Delphi, Linux         11. If something goes wrong
+    4. Commands              8. Several binaries
 
 
-1  Your first project
----------------------
+1  First project
+----------------
 
-Your project folder is mounted in the sandbox at `/app/<hash>`.
+The project folder is mounted at /app/<hash>. The program can be anywhere.
 
     cd /app/<hash>
-    mkdir target && cp /path/to/program target/   # 1. the file to study
-    decompile-init --mcp                          # 2. set up the project
-    file target/program                           # 3. what is it? (section 2)
-    exportjson.sh target/program out.json         # 4. export for Claude
-    ghidra-mcp-up                                 # 5. open Ghidra, connect
-    claude                                        # 6. start asking
+    decompile-init                 # set up the project
+    re init /path/to/program       # identify and export it (minutes)
+    claude                         # ask
 
-Step 5 starts Ghidra on the VNC desktop (section 5) and waits until Claude
-can reach it. The very first time you have to import the binary in Ghidra,
-open it in a CodeBrowser and enable the GhidraMCP plugin. After that Ghidra
-reopens your last program by itself. If the step times out, do that and run
-it again.
+re init decides what kind of file it is (section 3), writes decompile.yaml,
+restores real names for Delphi with debug info, exports all functions, and
+prints what comes next. Then ask in your own words:
 
-Good first questions inside claude:
+    What does this program do, and what are its main parts?
+    How does the part that saves the data work?
+    Show me step by step what happens when this function is called.
+    Check that precisely. I want to be sure before I change it.
+    Now describe that feature without references to the code.
 
-    /re-doc                          how is this program built, overall?
-    /re-explain what does main do    how does one part work?
-    /re-code main                    readable code for a function
-    /re-port the output format       a Python version of a feature
+Good order: top-down. First what the program offers to the outside (exports,
+entry points, handlers), then the parts behind them, then single functions.
 
-What decompile-init creates (it never overwrites your files):
 
-    CLAUDE.md                the rules Claude follows
-    NOTES.md                 your notes about the program
-    review/                  function cards (section 4)
-    .claude/skills/          the commands (section 4)
-    .claude/settings.json    permissions
-    .mcp.json                with --mcp: the connection to Ghidra
+2  Project structure
+--------------------
 
-Claude may run the read-only tools (file, rabin2, readelf, objdump, strings,
-outq, the export scripts) without asking. It still asks before it runs the
-program you are analyzing, a debugger or a tracer, and before it changes
-anything in Ghidra.
+The same in every project, so that after a while you still know what is what.
 
-You now have two views of the same program:
+Research data (what the research works on)
 
-    out.json         a snapshot of all functions. Good for overview,
-                     searching and the skills. Changes only when you run
-                     exportjson.sh again.
+    decompile.yaml     binaries, which one is current, settings
+    out.<id>.json      export of one binary; read with outq
+    ghidra/            the Ghidra project ghidra/project.gpr; one program per binary
+    src/<id>/          recovered source (.NET, Python only)
+    work/              scripts, extracted tables, captured runs
+    tools/queries.sql  saved queries (only when needed)
 
-    Ghidra window    the live project you and Claude edit. Good for
-                     renaming, structures and reading one function closely.
-                     Changes immediately.
+Working knowledge (what the research produces)
 
-Names that you or Claude change in Ghidra do not appear in out.json by
-themselves. For the latest names, have Claude read from Ghidra.
+    NOTES.md           yours: purpose, what you know, agreements on scope
+    LOG.md             Claude's: a few lines per session
+    review/<id>/       one card per function, with evidence
+    plan/              only when you work to a plan
 
-Without Ghidra's window you can skip --mcp and step 5. Everything except
-the live loop still works.
+Results (made from the knowledge)
 
+    docs/              ARCHITECTURE.md, map/, explain/, spec/, walkthrough/
 
-2  What kind of file is it?
----------------------------
+Setup: CLAUDE.md (rules), .claude/ (settings, skills, kb/ with knowledge per
+kind of binary), .mcp.json (with --mcp). Folders appear when first needed;
+nothing you have is overwritten.
 
-Run "file target/program", then find your case:
+Who writes what
 
-    ELF or PE executable, shared library
-        exportjson.sh, then claude
+    NOTES.md           you. Claude reads it every session, changes it only after asking.
+    decompile.yaml     scripts write the binaries; settings, current and types
+                       Claude changes only after asking.
+    review/, LOG.md    Claude, without asking. "My notes" in a card is yours and
+                       wins over Claude's reading.
+    plan.md            Claude proposes in the conversation, you confirm.
+    docs/              the skills, when you ask.
 
-    PE with Borland / Delphi strings
-        td32-import first (section 6), then as above
+Claude asks in the conversation, not through approval prompts (in the
+automatic permission mode they may not appear). Knowledge lives in the cards;
+docs/ is made from them and never holds the only copy of a finding.
 
-    Mono/.Net assembly
-        decompile-dotnet.sh target/App.exe
+decompile.yaml
 
-    Strings like _MEIPASS or python3X.dll
-        unfreeze-python.sh target/app
+    current: app                        # binary you work on (also open in Ghidra)
+    binaries:
+      app:
+        path: /data/legacy/App.exe
+        type: delphi
+        out_json: out.app.json
+    settings:
+      lang_docs: ""                     # language of cards, documents ("" = yours)
+      lang_walkthrough: ""              # language of walkthroughs
+      ghidra_live: false                # Claude works in the Ghidra window
 
-    Installer (Inno Setup, InstallShield, CAB)
-        unpack first: innoextract, unshield, cabextract
+Change it with re set / re use or an editor; re status checks it and names
+the line of a mistake.
 
-    Section names UPX0, UPX1
-        unpack first: upx -d on a copy
+How work usually goes
 
-Three more commands give a quick first impression of any binary:
+  1. Ask. Claude answers in the chat, updates the cards it understood, adds
+     a few lines to LOG.md. Next time it knows where you left off.
+  2. Ask for a document when you want to keep something: "write up the
+     architecture", "check that precisely", "show me step by step" (section 5).
+  3. A plan only for a larger goal over several sessions: "let's plan this".
 
-    rabin2 -I target/program     # architecture, 32/64-bit, stripped or not
-    rabin2 -i target/program     # imported functions: what it can do
-    rabin2 -zz target/program    # strings: messages, file names, formats
+Working to a plan (/re-plan)
 
+    plan/01-overview/plan.md, B-modules.md
+    plan/02-file-format/plan.md, A-open-file.md, B-header.md   <- active (last)
 
-3  Scripts
-----------
+A phase is a folder; a new one starts when the goal changes. Tasks are A, B,
+C with title, description and status (todo, active, done, dropped); letters
+are never reused, tasks never deleted. Details of a task go into its own file.
+Work done for a task is marked with its reference (02/B) in LOG.md and in the
+names of explanations made for it. Claude never starts a plan on its own.
 
-Each script prints its usage when run without arguments. The Ghidra-based
-ones take seconds for a small file and minutes for a large one.
+Names of explanations: files in docs/explain/ and docs/walkthrough/ start
+with a number in the order they were made (001-overview, 002-02B-header,
+003-startup); the task reference follows only when made for a task.
 
-`exportjson.sh <binary> [out.json]`
 
-    Run it once per binary. Writes every function (name, address, calls,
-    strings, pseudocode) to out.json. Claude and the skills read this file.
-    The binary does not have to be in target/: the script remembers where
-    it was.
+3  Kinds of files
+-----------------
 
-        exportjson.sh target/prog out.json
+re init prints the type it chose and why:
 
-`outq <command>`
+    native-elf, native-pe   export, then ask
+    delphi                  TD32 debug info, or Borland sections together with
+                            Delphi strings; with TD32 real names first (td32-import)
+    dotnet                  decompile-dotnet.sh <id>     C# into src/<id>/
+    python-frozen           unfreeze-python.sh <id>      .py into src/<id>/
+    packed (UPX)            upx -d on a copy, then re init the copy
+    installer               innoextract / unshield / cabextract, then re init
 
-    Looks into out.json so you never have to open it. Claude uses it too.
+Wrong type: re set binaries.<id>.type <type>. re init again keeps the type;
+--retype determines it again. Quick look: rabin2 -I / -i / -zz <file>.
 
-        outq info                 what is in the export, which binary
-        outq target               path of the analyzed binary
-        outq ls save              functions whose name matches
-        outq roots                functions nobody calls (handlers, callbacks)
-        outq show main 1:80       one function, or part of its pseudocode
-        outq grep 'CreateFile'    search the pseudocode of all functions
-        outq strings '\.dat'      who uses which string
-        outq imports              external functions and their callers
-        outq --help               the rest, and the format of out.json
 
-`contextpack.sh <binary> [out.md] [name]`
+4  Commands
+-----------
 
-    One function, or one class, as a readable Markdown file.
+Commands that take [id] use the current binary when it is left out; a path
+works too. --help on each.
 
-        contextpack.sh target/prog one.md parse_header
+    re init <binary> [--id ID] [--no-export] [--retype]
+    re status                    binaries, settings, plan phase, next steps
+    re use <id>                  make <id> current
+    re get <key> / re set <key> <value>
+                                 e.g. re set settings.lang_docs sl   ("" = default)
 
-`decompile.sh <binary> [out.c]`
+    outq info | ls [re] | roots | show NAME [A:B] | grep RE [NAME]
+         | strings [RE] | imports           -b <id> picks a binary
+    outq sql "SELECT ..."        anything else, over all binaries (DuckDB)
+    outq selftest                checks the saved queries
 
-    All pseudocode in one file, to search through.
+    exportjson.sh [id]           the export (re init runs it)
+    td32-import [id]             Delphi names from TD32 (re init runs it)
+    contextpack.sh [id] [out] [name], decompile.sh [id] [out]   files in work/
+    decompile-dotnet.sh [id], unfreeze-python.sh [id]          src/<id>/
+    ghidra-bg start|stop|status|log, ghidra-mcp-up              section 6
 
-        decompile.sh target/prog all.c
+outq show prints the first 150 lines; give a range for more. outq sql is
+read-only (SELECT, EXPLAIN; files only under work/) with the tables
+functions (column bin = binary), calls (bin, src, dst) and strings (bin,
+function, addr, value):
 
-`decompile-dotnet.sh <assembly>`
+    outq sql "SELECT bin, count(*) FROM functions GROUP BY bin"
+    outq sql "SELECT * FROM 'work/runs.csv'"
 
-    For .NET files. Gives a C# project.
+Useful queries Claude saves in tools/queries.sql as macros with an example.
+The Ghidra scripts run through ghidra-run in ghidra/project.gpr, so a binary
+is imported and analyzed only once.
 
-        decompile-dotnet.sh target/App.exe
+Optional: python3 /opt/ctx/extras/analyze.py (batch analysis through the
+Anthropic API, billed separately; writes to analyze/, --list to preview).
 
-`unfreeze-python.sh <app>`
 
-    For frozen Python apps. Gives .py files.
+5  Skills
+---------
 
-        unfreeze-python.sh target/app
+An ordinary question gets an answer in the chat. A skill is for a lasting
+result; Claude uses one when you ask for it. Type / to see them.
 
-`td32-import <program.exe>`
+    /re-doc            the big picture as a document       docs/ARCHITECTURE.md
+                       --review: claims checked by a second agent
+    /re-map            clickable map of modules and calls  docs/map/index.html
+    /re-explain        verified explanation, every claim   docs/explain/NNN-...md
+                       checked and reviewed by a second agent
+    /re-walkthrough    step by step, visual, or a demo     docs/walkthrough/NNN-...
+    /re-spec           what a feature does, without        docs/spec/<feature>.md
+                       references to the code
+    /re-plan           the research plan                   plan/NN-<phase>/
 
-    Delphi / C++Builder binary with debug info: restores the real names.
-    See section 6.
+Open the .html files on your own machine; they work offline. [C] = confirmed
+by evidence, [H] = hypothesis. Refuted claims stay with a correction. The
+language comes from decompile.yaml; --lang overrides it once. Your own skills:
+~/.config/decompile/skills/<name>/SKILL.md (copied by decompile-init).
 
-        td32-import target/App.exe
+To learn rather than get answers: "Here is my guess for FUN_00401a30 and my
+evidence. Don't give me the answer; tell me which claims hold and what I
+missed."
 
-`ghidra-bg start | stop | status | log`
 
-    Starts or stops the Ghidra window on the VNC desktop.
-
-`ghidra-mcp-up`
-
-    Connects Claude to the open Ghidra window. See section 5.
-
-`analyze.py --in out.json ...`
-
-    Batch analysis through the Anthropic API, without the chat. Needs
-    ANTHROPIC_API_KEY and "pip install anthropic"; it is billed separately.
-    Preview what it would do with --list:
-
-        analyze.py --in out.json --seed main --depth 2 --list
-
-
-4  Skills (commands inside Claude Code)
----------------------------------------
-
-A skill is a prepared procedure with a fixed output format. Type the
-command, or just ask in your own words and Claude picks the matching skill.
-Type / to see all skills in your project. The ones for binaries start with
-"re-" (reverse engineering), so they are not confused with skills for
-source code.
-
-    /re-code <function>
-        Readable, commented code for one function, saved as a card.
-        Add --depth 1 to do its callees too.
-        Writes: review/<function>.md
-
-    /re-port <feature>
-        A Python version or simulation of one feature, compared with the
-        original where the original can run.
-        Writes: reimpl/<feature>.py and its test
-
-    /re-explain <function or question>
-        How one part works, step by step, with every claim checked.
-        Writes: explain/<topic>.md
-
-    /re-doc
-        The big picture: what kind of program it is, its components, how
-        it runs.
-        Writes: ARCHITECTURE.md and map/architecture.html
-
-    /re-map
-        A clickable map of modules and functions.
-        Writes: map/index.html
-
-Open the .html files in a browser on your own machine (the project folder
-is shared). The libraries they need are embedded, so they work without
-internet.
-
-Where things are written
-
-Everything worth keeping lands in the project folder, each kind in its
-place:
-
-    review/            one card per function: what it does, its signature
-                       and data, readable code
-    explain/           answers to "how does X work", with checked claims
-    reimpl/            Python versions of features, with tests
-    ARCHITECTURE.md    the big picture
-    map/               the clickable map and the rendered architecture
-    work/              extracted tables, listings, helper scripts
-    NOTES.md           your notes about the whole program
-
-A card in review/ has two parts. Claude keeps "Analysis" up to date.
-"My notes" is yours: Claude never edits it, and what you write there wins
-over its own reading. Use it when you know something the binary cannot
-show (how a device behaves, what a button does), when Claude got something
-wrong, or when you tested a hypothesis yourself.
-
-Reading the results
-
-  - [C] means confirmed: backed by evidence.
-    [H] means hypothesis: plausible, not proven.
-  - Claim tables say verified, refuted or unverified. Refuted claims stay
-    in the document with a correction; they show where first impressions
-    were wrong.
-
-Working with skills
-
-  - Add --lang sl (or another language) to get the text in that language.
-  - Learned something new? Run the skill again with --refresh. It changes
-    only what the new evidence supports.
-  - Your notes win. What you write under "My notes" in a card, or in
-    NOTES.md, overrides Claude's own reading, so correct things there.
-  - A skill is missing from the / list? Run decompile-init again.
-  - Your own skills: put a folder with a SKILL.md into
-    ~/.config/decompile/skills/. decompile-init copies it into every new
-    project, and it stays out of this repository.
-
-If you want to learn, not just get answers, write your own guess first and
-ask Claude to check it:
-
-    Here is my guess for FUN_00401a30 and my evidence. Don't give me the
-    answer. Tell me which claims hold, which are wrong, and what I missed.
-
-
-5  Ghidra window and the live loop
+6  Ghidra window and the live loop
 ----------------------------------
 
-Ghidra runs on a VNC desktop. Connect a VNC client to 127.0.0.1:5901
-(password $SANDBOX_VNC_PASS, default "sandbox"). From another machine:
+VNC: 127.0.0.1:5901, password $SANDBOX_VNC_PASS (default "sandbox"); from
+another machine ssh -L 5901:127.0.0.1:5901 -p 2232 dev@host.
 
-    ssh -L 5901:127.0.0.1:5901 -p 2232 dev@host
+    decompile-init --mcp               # .mcp.json, Ghidra read permissions
+    re set settings.ghidra_live true
+    ghidra-mcp-up                      # starts Ghidra, waits for the plugin
+    claude                             # /mcp shows "ghidra"
 
-In the live loop, Claude works inside your open Ghidra project: it renames
-things, creates structures and re-decompiles until the code reads well.
-Section 1 shows how to start it (decompile-init --mcp, ghidra-mcp-up,
-claude). Inside claude, type /mcp to see whether "ghidra" is connected.
+The first time: in Ghidra open ghidra/project.gpr, open the program of the
+current binary (named by its id), enable the GhidraMCP plugin (File >
+Configure). Ghidra then reopens it by itself.
 
-What Claude may do there is set in .claude/settings.json:
+Claude reads freely (get_*, list_*, find_*, search_*, decompile_*, read_*).
+It renames, retypes or creates structures only when you ask or agree, one
+task at a time, and says first what it will change; each change asks for
+approval. Names given in Ghidra are hypotheses, not evidence.
 
-    Read      get_*, list_*, find_*, search_*, decompile_*, read_*
-              These run automatically.
+The export does not see changes made in Ghidra, and the scripts cannot open
+the project while the window holds it; they stop and print the steps. With
+ghidra_live Claude reads from Ghidra, so re-export only when needed (outq sql,
+skills over many functions): save, File > Close Project, exportjson.sh <id>,
+open it again.
 
-    Change    create_struct, rename_*, apply_data_type,
-              set_function_prototype, save_*
-              Claude asks you first.
+/mcp "failed": Ghidra not open, plugin not enabled, or no program loaded.
+Port 8089 (Edit > Tool Options > GhidraMCP HTTP Server, and .mcp.json).
 
-The goal of the loop is pseudocode without uVar, param_1 or undefined
-names: Claude names and types things, re-decompiles, and repeats.
-
-If /mcp shows "failed": Ghidra is not open, the plugin is not enabled, or
-no program is loaded. The port is 8089. Change it in Ghidra under
-Edit > Tool Options > GhidraMCP HTTP Server, and in .mcp.json.
-
-Tools on the desktop and in the terminal:
-
-    ghidraRun    Ghidra: decompiler, call graphs (runs on JDK 25)
-    cutter       radare2 with a GUI
-    imhex        hex editor with patterns for file formats
-    jadx-gui     Java / APK
-    geany        light editor for notes and decompiled C#
-    r2, rabin2, objdump, readelf, binwalk, exiftool
-                 quick look from the terminal
-
-Cutter and ImHex are AppImages and run in extract-and-run mode (no FUSE
-needed). If one reports a missing library, add the package to
-PROFILE_decompile_DNF and rebuild.
+Desktop tools: ghidraRun, cutter, imhex, jadx-gui, geany; terminal: r2,
+rabin2, objdump, readelf, binwalk, exiftool.
 
 
-6  Delphi / C++Builder
-----------------------
+7  Delphi, Linux
+----------------
 
-There are two layers: names, which come automatically from TD32 debug info
-when the binary still has it, and types, which you apply once the evidence
-confirms them.
+Delphi / C++Builder: re init runs td32-import when the binary has TD32 debug
+info; outq info shows "qualified" > 0 when the names arrived (otherwise
+td32-import <id>, then exportjson.sh <id>). Without Ghidra: td32_ghidra.py
+check|extract <file>. How to read Delphi code (registers, VMT, string
+headers) and which prototypes to apply is in .claude/kb/delphi.md, which
+Claude reads for every Delphi binary.
 
-Names
-
-    td32_ghidra.py check target/App.exe     # TD32 (FB09) there? how many?
-    td32_ghidra.py extract target/App.exe s.json     # optional: as JSON
-    td32-import target/App.exe              # Ghidra project, real names
-    exportjson.sh target/App.exe out.json
-    outq info                               # "qualified" > 0: names arrived
-
-td32-import takes an optional project directory as a second argument, and
---skip-analysis to reuse an already analyzed project. If outq info reports
-0 qualified names, use the live loop (section 5) on the project that
-td32-import created.
-
-Reading Delphi code
-
-  - Arguments are passed in registers EAX, EDX, ECX. In a method, EAX is
-    Self.
-  - Every object (TObject) starts at offset 0 with a pointer to its class
-    table (VMT).
-  - Strings and dynamic arrays point at their first element. The header
-    sits before the data:
-
-        Layout            Length     Reference count
-        32-bit            at -4      at -8
-        64-bit (usual)    at -8      at -16
-
-    Trust what you measure in the binary over this table, and confirm it
-    against calls to DynArraySetLength.
-
-Types to apply in the live loop
-
-Set these with set_function_prototype only after the call pattern confirms
-the arguments. Delphi names are shown; Free Pascal uses fpc_*.
-
-    DynArraySetLength(void** a, void* typeInfo, intptr dims, intptr* lens)
-    RaiseExcept(TObject* exc)
-    GetMem(int size)
+Linux programs and libraries can run here: readelf -d / --dyn-syms, strace
+-f, ltrace, gdb, or call a function from Python (ctypes) and compare with
+your own version, the strongest proof. Claude proposes such runs and starts
+them only with your approval. Run only binaries you trust in this container,
+never on the host.
 
 
-7  Native Linux binaries
-------------------------
+8  Several binaries
+-------------------
 
-Linux programs and libraries can run inside the sandbox, so you can watch
-what they really do instead of relying on pseudocode alone.
+    re init /path/to/core.dll --id core
+    re use core                    # optional
 
-    readelf -d target/lib.so            # which libraries it needs
-    readelf --dyn-syms target/lib.so    # exported functions: entry points
-    strace -f ./target/program          # system calls
-    ltrace ./target/program             # library calls
-    gdb ./target/program                # breakpoints, memory
-
-You can also call a library function directly from Python (ctypes) and
-compare its output with your own version. That is the strongest proof that
-you understood it.
-
-Only run binaries you trust enough to run in this container, and never on
-the host.
+All binaries share the Ghidra project (one program each, named by id); each
+has its export and cards (review/<id>/); docs/ and plan/ describe the whole
+program. Claude names the binary in every command. If you switch current
+yourself, tell Claude or start it again; a new session reads decompile.yaml,
+NOTES.md, LOG.md and the plan. Calls into another binary appear as imports
+(CORE.DLL::Calculate, or Ordinal_17); Claude follows them with outq sql.
 
 
-8  The rule: evidence first
+9  Evidence first
+-----------------
+
+  - Every claim has an address or a line of pseudocode. No evidence, no claim.
+  - FUN_00401a30, uVar1, undefined4 mean nothing. Reason from what the code
+    does, who calls it, what data it uses. Read constants from their values.
+  - Names are never evidence: a name given in Ghidra is an earlier hypothesis;
+    one from debug info says which function it is, not what it does.
+  - Guesses from names or strings go under "Hypotheses (unverified)".
+  - What you wrote (NOTES.md, "My notes") wins over Claude's reading.
+
+The full rules are in CLAUDE.md, loaded in every session.
+
+
+10  Upgrading a project made with an older version
+--------------------------------------------------
+
+    decompile-init --migrate     # new CLAUDE.md, skills, kb, permissions;
+                                 # results move under docs/
+    re init /path/to/program     # out.json -> out.<id>.json, cards -> review/<id>/
+
+Replaced files are kept in .claude/old/. NOTES.md stays as it is (the new
+template is /opt/ctx/init/NOTES.md); Claude's log now goes to LOG.md. The old
+<program>_ghidra project is not used; the binary is imported into ghidra/
+once.
+
+
+11  If something goes wrong
 ---------------------------
 
-  - Back every claim with an address or a line of pseudocode. No evidence,
-    no claim.
-  - Names such as FUN_00401a30, uVar1 and undefined4 are generated and
-    mean nothing. Reason from what the code does, who calls it, and what
-    data it uses.
-  - Read constants from their values, not from guesses about them.
-  - Keep guesses based on names or strings in a separate
-    "Hypotheses (unverified)" section until something confirms them.
+    Script: project open in the Ghidra window   close it there (or ghidra-bg
+                                                stop), run again (section 6)
+    ghidra-run: pyghidra too old                pip install -U pyghidra, or rebuild
+    re: yq missing / not mikefarah              the image installs it in
+                                                /usr/local/bin; dnf's yq differs
+    decompile.yaml not valid YAML               indentation; re status names the line
+    Ghidra or Java missing                      rebuild; echo $GHIDRA_INSTALL_DIR,
+                                                java -version
+    unfreeze-python.sh: empty .py files         Python too new: pycdas file.pyc
+    GUI tool: missing library                   add it to PROFILE_decompile_DNF
+    Diagrams show as text                       Mermaid not downloaded at build
+                                                (WARN in the log); CDN with internet
+    Claude states something without address     ask for the evidence (CLAUDE.md)
 
-The full rules are in CLAUDE.md, which Claude Code loads automatically in
-every project.
+GhidraMCP plugin missing after a build:
 
-
-9  If something goes wrong
---------------------------
-
-A script says Ghidra or Java is missing
-
-    Rebuild the profile. Check "echo $GHIDRA_INSTALL_DIR" and
-    "java -version".
-
-unfreeze-python.sh produces empty .py files
-
-    The Python version is too new for the decompiler. Read the bytecode
-    instead: pycdas file.pyc
-
-A GUI tool reports a missing library
-
-    Add the package to PROFILE_decompile_DNF and rebuild.
-
-Diagrams in architecture.html show as text
-
-    The Mermaid library was not downloaded when the image was built (look
-    for a WARN line in the build log). With internet access the page loads
-    it from a CDN.
-
-Claude states something without an address
-
-    Ask for the evidence. It is a rule in CLAUDE.md.
-
-The GhidraMCP plugin is missing after a build
-
-    Build it by hand:
-
-        pip install --break-system-packages uv
-        git clone https://github.com/bethington/ghidra-mcp && cd ghidra-mcp
-        python3 -m tools.setup ensure-prereqs --ghidra-path /opt/ghidra
-        python3 -m tools.setup build
-        sudo unzip -o target/GhidraMCP-*.zip -d /opt/ghidra/Ghidra/Extensions
-        pip install --break-system-packages .
+    pip install --break-system-packages uv
+    git clone https://github.com/bethington/ghidra-mcp && cd ghidra-mcp
+    python3 -m tools.setup ensure-prereqs --ghidra-path /opt/ghidra
+    python3 -m tools.setup build
+    sudo unzip -o target/GhidraMCP-*.zip -d /opt/ghidra/Ghidra/Extensions
+    pip install --break-system-packages .

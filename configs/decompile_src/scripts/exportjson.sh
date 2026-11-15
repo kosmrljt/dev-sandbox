@@ -1,29 +1,24 @@
 #!/usr/bin/env bash
-# exportjson.sh — headless Ghidra (PyGhidra): export the program as structured JSON.
+# exportjson.sh — headless Ghidra (PyGhidra): export one binary as structured JSON.
 #
-# Usage:  exportjson.sh <binary> [output.json]
-# Example: exportjson.sh /work/legacy.bin /work/legacy.json
+# Usage:  exportjson.sh [id|binary] [output.json]
+#   id       a binary from decompile.yaml (default: its "current")
+#   binary   a path; an unknown one is first added with  re init --no-export
+#   output   default: out.<id>.json in the project directory
 #
-# Ghidra 12.x dropped Jython; Python GhidraScripts run only via PyGhidra. The
-# `pyghidra` launcher imports the binary, auto-analyzes it, and runs our .py
-# script against it (equivalent to the old `analyzeHeadless -import -postScript`,
-# which can no longer start Python). Trailing args are passed to the script.
-
+# Runs through ghidra-run: all binaries share one Ghidra project, ghidra/project.gpr,
+# where each program is named after its id. A binary already there is not imported
+# or analyzed again (td32-import names stay). Takes minutes the first time.
 set -euo pipefail
 
-BIN="${1:?usage: exportjson.sh <binary> [output.json]}"
-OUT="${2:-${BIN%.*}.json}"
-
+IFS=$'\t' read -r ID BIN < <(re resolve "${1:-}")
+OUT="${2:-out.$ID.json}"
 [[ -f "$BIN" ]] || { echo "No such file: $BIN" >&2; exit 1; }
-export GHIDRA_INSTALL_DIR="${GHIDRA_INSTALL_DIR:-${GHIDRA_HOME:-/opt/ghidra}}"
 
-echo "== Exporting program to JSON (PyGhidra headless) =="
-pyghidra "$BIN" /opt/scripts/ExportJson.py "$OUT"
-
-# Remember which binary this export belongs to, so `outq target` and the skills
-# find it wherever it lives (target/, the project dir, or elsewhere).
-realpath --relative-to="$(dirname "$OUT")" "$BIN" > "$OUT.target" 2>/dev/null || echo "$BIN" > "$OUT.target"
+echo "== Exporting $ID ($BIN) to $OUT (PyGhidra headless) =="
+ghidra-run "$ID" /opt/scripts/ExportJson.py "$(realpath -m "$OUT")"
+re set "binaries.$ID.out_json" "$OUT" >/dev/null
 
 echo
 echo "== Done: $OUT =="
-echo "Next: outq -f $OUT info      (what is in the export; outq --help for more)"
+echo "Next: outq -b $ID info      (what is in the export; outq --help for more)"

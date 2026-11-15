@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # unfreeze-python.sh — recover .py source from a frozen Python binary.
 #
-# Use this ONLY when `file <binary>` or `strings` show it is a PyInstaller /
-# py2exe / cx_Freeze app (look for "pyinstaller", "python3X.dll", "_MEIPASS").
+# Use it when re init says python-frozen (PyInstaller: "_MEIPASS", "python3X.dll").
 #
-# Usage: unfreeze-python.sh <frozen_app.exe|elf>
-
+# Usage:  unfreeze-python.sh [id|frozen_app] [output_dir]
+#   default output: src/<id>/  (recorded in decompile.yaml as binaries.<id>.src)
 set -euo pipefail
 
-BIN="${1:?usage: unfreeze-python.sh <frozen_app>}"
-WORK="$(dirname "$BIN")/unfreeze_out"
+IFS=$'\t' read -r ID BIN < <(re resolve "${1:-}")
+BIN="$(realpath "$BIN")"
+WORK="$(realpath -m "${2:-src/$ID}")"
 mkdir -p "$WORK"
 
 echo "== Extracting PyInstaller archive =="
@@ -26,7 +26,11 @@ while IFS= read -r -d '' pyc; do
     pycdc "$pyc" > "$out" 2>/dev/null || echo "    (pycdc failed; try: pycdas \"$pyc\" for a disassembly)"
 done < <(find "$WORK" -name '*.pyc' -print0)
 
-[[ "$found" -eq 0 ]] && echo "No .pyc files found — this may not be a frozen-Python binary."
+if [[ "$found" -eq 0 ]]; then
+    echo "No .pyc files found — this may not be a frozen-Python binary."
+else
+    re set "binaries.$ID.src" "$(realpath --relative-to=. "$WORK")" >/dev/null
+fi
 
 echo
 echo "== Done. Recovered sources under: $WORK =="

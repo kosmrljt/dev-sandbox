@@ -1,0 +1,332 @@
+#!/usr/bin/env bash
+# re - the project's configuration (decompile.yaml) and its start.
+#
+#   re init <binary> [--id ID] [--no-export] [--retype]
+#                         identify the binary, add it to decompile.yaml, run td32-import
+#                         for Delphi with debug info, then the export (takes minutes).
+#                         For a binary already there the type is kept unless --retype.
+#   re status             binaries, settings, active plan phase and next steps
+#   re use <id>           make <id> the current binary
+#   re get <key> [default]    read a value, e.g.  re get settings.lang_docs sl
+#   re set <key> <value>      change a value (checked), e.g.  re set settings.ghidra_live true
+#                             re set settings.lang_docs ""   back to the default
+#   re path [id]          path of the binary (default: current)
+#   re export [id]        its export file (out.<id>.json)
+#   re resolve <id|path>  "id<TAB>path"; registers an unknown path (without export)
+#   re ghidra-check       fails with a message if the Ghidra window holds ghidra/project.gpr
+#
+# Run it in the project directory (where decompile.yaml lives). Needs yq (mikefarah, v4).
+set -euo pipefail
+
+CFG="decompile.yaml"
+YQ="${YQ:-yq}"
+TYPES="native-elf native-pe delphi dotnet python-frozen packed installer unknown"
+
+die() { echo "re: $*" >&2; exit 1; }
+need_yq() {
+    command -v "$YQ" >/dev/null || die "yq not found (mikefarah yq v4 is needed)"
+    "$YQ" --version 2>/dev/null | grep -q mikefarah || die "'$YQ' is not mikefarah yq v4 (the Fedora/Debian 'yq' package is a different tool)"
+}
+need_cfg() {
+    [[ -f "$CFG" ]] || die "no $CFG here. Run it in the project directory, or start with:  re init <binary>"
+    local err; err="$("$YQ" '.' "$CFG" 2>&1 >/dev/null)" || die "$CFG is not valid YAML: $err"
+}
+# Values never go into a yq expression as text: they are passed in the
+# environment (ID, V, P) and read with strenv(), so quotes in a path are safe.
+q() { "$YQ" "$1" "$CFG"; }
+w() { "$YQ" -i "$1" "$CFG"; }
+has_bin() { [[ "$(ID="$1" q '.binaries | has(strenv(ID))')" == "true" ]]; }
+current() { local c; c="$(q '.current // ""')"; [[ -n "$c" ]] || die "no current binary in $CFG"; echo "$c"; }
+bin_get() { ID="$1" q ".binaries[strenv(ID)].$2 // \"\""; }
+bin_path() { bin_get "$1" path; }
+export_of() { local e; e="$(bin_get "$1" out_json)"; echo "${e:-out.$1.json}"; }
+id_of_path() { P="$1" q '.binaries | to_entries | .[] | select(.value.path == strenv(P)) | .key' | head -n1; }
+
+slug() {  # file name -> id: lowercase letters, digits, _
+    local s; s="$(basename "$1")"; s="${s%.*}"
+    s="$(echo "$s" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_]/_/g; s/^_*//; s/_*$//')"
+    echo "${s:-bin}"
+}
+
+# --- triage ------------------------------------------------------------------
+has_td32() { tail -c 8 "$1" 2>/dev/null | head -c 4 | cmp -s - <(printf 'FB09'); }
+pe_sections() {  # section names of a PE file, one per line (nothing if not PE)
+    python3 -I - "$1" <<'PY' 2>/dev/null || true
+import struct, sys
+b = open(sys.argv[1], "rb").read(1 << 20)
+if b[:2] != b"MZ" or len(b) < 64:
+    sys.exit()
+pe = struct.unpack_from("<I", b, 0x3C)[0]
+if b[pe:pe + 4] != b"PE\0\0":
+    sys.exit()
+n, opt = struct.unpack_from("<H", b, pe + 6)[0], struct.unpack_from("<H", b, pe + 20)[0]
+t = pe + 24 + opt
+for i in range(n):
+    print(b[t + 40 * i:t + 40 * i + 8].rstrip(b"\0").decode("latin-1"))
+PY
+}
+triage() {  # print "type<TAB>reason"
+    local f="$1" desc secs
+    desc="$(file -b "$f" 2>/dev/null || true)"
+    secs="$(pe_sections "$f")"
+    if grep -aqE 'Inno Setup Setup Data|Nullsoft Install System|InstallShield' "$f" 2>/dev/null \
+       || [[ "$desc" == *"Inno Setup"* || "$desc" == *"InstallShield"* || "$desc" == *"Nullsoft"* ]]; then
+        printf 'installer\tinstaller signature\n'
+    elif [[ "$desc" == *"UPX compressed"* ]] || grep -qx 'UPX0' <<<"$secs"; then
+        printf 'packed\tUPX\n'
+    elif [[ "$desc" == *".Net assembly"* ]]; then
+        printf 'dotnet\tfile: %s\n' "$desc"
+    elif grep -aqE '_MEIPASS|pyi-runtime-tmpdir' "$f" 2>/dev/null; then
+        printf 'python-frozen\tPyInstaller strings (_MEIPASS)\n'
+    elif [[ "$desc" == ELF* ]]; then
+        printf 'native-elf\tfile: ELF\n'
+    elif [[ -n "$secs" || "$desc" == PE32* ]]; then
+        # Delphi only on TD32, or on two independent signs: Borland-style
+        # sections AND typical runtime strings. One string alone is not enough.
+        local sec_sign="" str_sign=""
+        grep -qxE 'CODE|DATA|BSS|\.itext|\.didata' <<<"$secs" && sec_sign="Borland sections ($(grep -xE 'CODE|DATA|BSS|\.itext|\.didata' <<<"$secs" | paste -sd, -))"
+        grep -aqE 'TApplication|FastMM|SOFTWARE\\Borland\\Delphi|Embarcadero' "$f" 2>/dev/null && str_sign="Delphi runtime strings"
+        if has_td32 "$f"; then
+            printf 'delphi\tTD32 debug info (FB09)\n'
+        elif [[ -n "$sec_sign" && -n "$str_sign" ]]; then
+            printf 'delphi\t%s + %s\n' "$sec_sign" "$str_sign"
+        else
+            printf 'native-pe\tPE%s\n' "${sec_sign:+; only one Delphi sign: $sec_sign}${str_sign:+; only one Delphi sign: $str_sign}"
+        fi
+    else
+        printf 'unknown\tfile: %s\n' "$desc"
+    fi
+}
+
+new_cfg() {  # new_cfg <id>
+    cat > "$CFG" <<'EOF'
+# decompile.yaml: the project's configuration.
+# Change it with  re set / re use,  or edit it by hand (indentation matters).
+
+# The binary you are working on now. The same program must be open in Ghidra.
+current: ""
+
+# Binaries of this program. Written by re init and the scripts.
+binaries: {}
+
+# Decisions for this project. Empty or missing = default.
+settings:
+  # Language of cards and documents, e.g. "sl" or "en" ("" = the language you write in).
+  lang_docs: ""
+  # Language of walkthroughs ("" = the language you write in).
+  lang_walkthrough: ""
+  # true = Claude works in the open Ghidra window through MCP.
+  ghidra_live: false
+EOF
+    ID="$1" w '.current = strenv(ID)'
+}
+
+# --- commands ----------------------------------------------------------------
+cmd_init() {
+    local bin="" id="" export=1 retype=0
+    while (($#)); do
+        case "$1" in
+            --id) id="${2:?--id needs a value}"; shift ;;
+            --no-export) export=0 ;;
+            --retype) retype=1 ;;
+            -*) die "unknown option: $1" ;;
+            *) bin="$1" ;;
+        esac
+        shift
+    done
+    [[ -n "$bin" ]] || die "usage: re init <binary> [--id ID] [--no-export] [--retype]"
+    [[ -f "$bin" ]] || die "no such file: $bin"
+    bin="$(realpath "$bin")"
+
+    local first=0
+    if [[ -f "$CFG" ]]; then
+        need_cfg
+        # The same file again: keep its id unless another one is asked for.
+        if [[ -z "$id" ]]; then id="$(id_of_path "$bin")"; fi
+    fi
+    id="${id:-$(slug "$bin")}"
+    [[ "$id" =~ ^[a-z0-9_]+$ ]] || die "id must be lowercase letters, digits or _: $id"
+    if [[ ! -f "$CFG" ]]; then new_cfg "$id"; first=1; echo "+ $CFG"; fi
+
+    local type reason
+    if has_bin "$id"; then
+        [[ "$(bin_path "$id")" == "$bin" ]] || die "id '$id' is already used for $(bin_path "$id"); choose another with --id"
+        type="$(bin_get "$id" type)"
+        if (( retype )) || [[ -z "$type" ]]; then
+            IFS=$'\t' read -r type reason < <(triage "$bin")
+            ID="$id" V="$type" w '.binaries[strenv(ID)].type = strenv(V)'
+            echo "= $id: type determined again: $type ($reason)"
+        else
+            echo "= $id is already in $CFG, type $type kept (re init --retype to determine it again)"
+        fi
+    else
+        IFS=$'\t' read -r type reason < <(triage "$bin")
+        ID="$id" P="$bin" V="$type" w '.binaries[strenv(ID)].path = strenv(P) | .binaries[strenv(ID)].type = strenv(V)'
+        echo "+ $id: $bin"
+        echo "  type: $type, because: $reason   (wrong? re set binaries.$id.type <type>)"
+    fi
+    [[ -n "$(q '.current // ""')" ]] || ID="$id" w '.current = strenv(ID)'
+
+    # Cards from before decompile.yaml (flat review/*.md) belong to the first binary.
+    if (( first )) && compgen -G "review/*.md" >/dev/null; then
+        mkdir -p "review/$id"
+        mv review/*.md "review/$id/"
+        echo "> existing cards moved to review/$id/"
+    fi
+    mkdir -p "review/$id"
+    # An export of an older version (out.json) belongs to the first binary.
+    if (( first )) && [[ -f out.json && ! -f "out.$id.json" ]]; then
+        mv out.json "out.$id.json" && rm -f out.json.target
+        ID="$id" V="out.$id.json" w '.binaries[strenv(ID)].out_json = strenv(V)'
+        echo "> out.json renamed to out.$id.json (no new export needed)"
+    fi
+
+    case "$type" in
+        native-elf|native-pe|delphi|unknown)
+            if [[ -f "$(export_of "$id")" ]]; then
+                echo "  export $(export_of "$id") exists; to redo it: exportjson.sh $id"
+            elif (( export )); then
+                if [[ "$type" == delphi ]] && has_td32 "$bin"; then td32-import "$id"; fi
+                exportjson.sh "$id"
+            else
+                if [[ "$type" == delphi ]] && has_td32 "$bin"; then echo "  next: td32-import $id"; fi
+                echo "  next: exportjson.sh $id"
+            fi ;;
+        dotnet)        echo "  next: decompile-dotnet.sh $id      (C# source into src/$id/)" ;;
+        python-frozen) echo "  next: unfreeze-python.sh $id       (Python source into src/$id/)" ;;
+        packed)        echo "  next: unpack a copy (upx -d), then re init the unpacked file" ;;
+        installer)     echo "  next: extract it (innoextract, unshield, cabextract), then re init the program" ;;
+    esac
+    echo
+    cmd_status
+}
+
+cmd_status() {
+    need_cfg
+    local cur ids id p t e n l
+    cur="$(q '.current // ""')"
+    ids="$(q '.binaries | keys | .[]')"
+    echo "binaries"
+    for id in $ids; do
+        p="$(bin_path "$id")"; t="$(bin_get "$id" type)"; e="$(export_of "$id")"
+        if [[ -f "$e" ]]; then n="$e"; else n="no export"; fi
+        [[ -f "$p" ]] || n="$n; BINARY MISSING"
+        printf '  %s %-12s %-14s %s  (%s)\n' "$([[ $id == "$cur" ]] && echo '*' || echo ' ')" "$id" "${t:-unknown}" "$p" "$n"
+    done
+    echo "settings"
+    for k in lang_docs lang_walkthrough; do
+        l="$(q ".settings.$k // \"\"")"
+        printf '  %-17s %s\n' "$k" "${l:-(the language you write in)}"
+    done
+    printf '  %-17s %s\n' ghidra_live "$(q '.settings.ghidra_live')" | sed 's/ null$/ false/'
+    local phase; phase="$(ls -d plan/[0-9]*/ 2>/dev/null | sort | tail -n1 || true)"
+    if [[ -n "$phase" ]]; then echo "plan"; printf '  active phase      %s\n' "${phase%/}"; fi
+    echo "next"
+    local any=0
+    for id in $ids; do
+        t="$(bin_get "$id" type)"; e="$(export_of "$id")"
+        case "$t" in
+            native-elf|native-pe|delphi|unknown|"")
+                [[ -f "$e" ]] || { echo "  exportjson.sh $id"; any=1; } ;;
+            dotnet|python-frozen)
+                [[ -n "$(bin_get "$id" src)" ]] || { echo "  $([[ $t == dotnet ]] && echo decompile-dotnet.sh || echo unfreeze-python.sh) $id"; any=1; } ;;
+            packed|installer) echo "  $id: unpack first, then re init the result"; any=1 ;;
+        esac
+    done
+    if [[ "$(q '.settings.ghidra_live')" == "true" ]]; then
+        echo "  ghidra-mcp-up      (Ghidra window: ghidra/project.gpr, program '$cur' open)"; any=1
+    fi
+    (( any )) || echo "  nothing pending: ask Claude"
+}
+
+cmd_use() {
+    need_cfg
+    local id="${1:?usage: re use <id>}"
+    has_bin "$id" || die "no binary '$id' (binaries: $(q '.binaries | keys | join(" ")'))"
+    ID="$id" w '.current = strenv(ID)'
+    echo "current: $id"
+    if [[ "$(q '.settings.ghidra_live')" == "true" ]]; then echo "open program '$id' (in ghidra/project.gpr) in the Ghidra window"; fi
+    return 0
+}
+
+cmd_get() {
+    need_cfg
+    local key="${1:?usage: re get <key> [default]}" def="${2:-}" v
+    [[ "$key" =~ ^[A-Za-z0-9_.-]+$ ]] || die "bad key: $key"
+    v="$(q ".$key")"            # false stays false; only null/empty take the default
+    if [[ -z "$v" || "$v" == "null" ]]; then echo "$def"; else echo "$v"; fi
+}
+
+cmd_set() {
+    need_cfg
+    local key="${1:?usage: re set <key> <value>}" val="${2?usage: re set <key> <value>}"
+    case "$key" in
+        current) cmd_use "$val"; return ;;
+        settings.lang_docs|settings.lang_walkthrough)
+            [[ -z "$val" || "$val" =~ ^[a-z]{2,3}(-[A-Za-z]{2,4})?$ ]] || die "$key: a language code such as sl, en, de, or \"\" for the default"
+            V="$val" w ".$key = strenv(V) | .$key style=\"double\"" ;;
+        settings.ghidra_live)
+            [[ "$val" == true || "$val" == false ]] || die "$key: true or false"
+            w ".$key = $val" ;;
+        binaries.*.*)
+            local id f; id="$(echo "$key" | cut -d. -f2)"; f="$(echo "$key" | cut -d. -f3-)"
+            has_bin "$id" || die "no binary '$id' (binaries: $(q '.binaries | keys | join(" ")'))"
+            case "$f" in
+                type) [[ " $TYPES " == *" $val "* ]] || die "type: one of $TYPES" ;;
+                path|out_json|src) ;;
+                *) die "unknown key: $key (binaries.<id>.type|path|out_json|src)" ;;
+            esac
+            ID="$id" V="$val" w ".binaries[strenv(ID)].$f = strenv(V)" ;;
+        *) die "unknown key: $key (known: current, settings.lang_docs, settings.lang_walkthrough, settings.ghidra_live, binaries.<id>.type|path|out_json|src)" ;;
+    esac
+    echo "$key = $val"
+}
+
+cmd_resolve() {  # id or path -> "id<TAB>path"
+    local a="${1:-}"
+    if [[ -z "$a" ]]; then need_cfg; a="$(current)"; fi
+    if [[ -f "$CFG" ]]; then
+        need_cfg
+        if has_bin "$a"; then printf '%s\t%s\n' "$a" "$(bin_path "$a")"; return; fi
+    fi
+    [[ -f "$a" ]] || die "'$a' is neither a binary id in $CFG nor a file"
+    local rp id; rp="$(realpath "$a")"
+    if [[ -f "$CFG" ]]; then
+        id="$(id_of_path "$rp")"
+        if [[ -n "$id" ]]; then printf '%s\t%s\n' "$id" "$rp"; return; fi
+    fi
+    cmd_init "$rp" --no-export >&2
+    printf '%s\t%s\n' "$(id_of_path "$rp")" "$rp"
+}
+
+cmd_ghidra_check() {
+    # The Ghidra project is ghidra/project.gpr; Ghidra writes ghidra/project.lock while
+    # a program holds it. Headless scripts cannot open it then.
+    if compgen -G "ghidra/project.lock*" >/dev/null; then
+        if pgrep -f 'ghidra\.GhidraRun|ghidra\.GhidraLauncher|pyghidraRun|pyghidra.*(-g|--gui)' >/dev/null 2>&1; then
+            cat >&2 <<'EOF'
+re: the Ghidra project ghidra/project.gpr is open in the Ghidra window.
+    1. In Ghidra: File > Close Project (or: ghidra-bg stop)
+    2. Run the command again
+    3. Open ghidra/project.gpr in Ghidra again (ghidra-mcp-up reopens the last one)
+EOF
+            exit 1
+        fi
+        echo "re: note: ghidra/project.lock exists but no Ghidra window runs (left over?); trying anyway" >&2
+    fi
+}
+
+need_yq
+case "${1:-}" in
+    init)    shift; cmd_init "$@" ;;
+    status)  shift; cmd_status ;;
+    use)     shift; cmd_use "$@" ;;
+    get)     shift; cmd_get "$@" ;;
+    set)     shift; cmd_set "$@" ;;
+    path)    shift; need_cfg; id="${1:-$(current)}"; has_bin "$id" || die "no binary '$id'"; bin_path "$id" ;;
+    export)  shift; need_cfg; id="${1:-$(current)}"; has_bin "$id" || die "no binary '$id'"; export_of "$id" ;;
+    resolve) shift; cmd_resolve "$@" ;;
+    ghidra-check) shift; cmd_ghidra_check ;;
+    ""|-h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+    *) die "unknown command '$1' (re --help)" ;;
+esac

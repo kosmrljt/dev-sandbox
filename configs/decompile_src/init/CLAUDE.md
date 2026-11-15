@@ -1,100 +1,131 @@
-# Reverse-engineering project — rules for Claude Code
+# Reverse-engineering project
 
-Goal: turn an old binary into readable, commented code. Work selectively, not on
-every function.
+Goal: help the user understand a compiled program without source code, to the
+depth their purpose needs.
 
-## Grounding (non-negotiable)
+## Start of a session
 
-- Reason from pseudocode and evidence (signature, callers, callees, referenced
-  strings/data with addresses and values) — never from names. `FUN_*`, `uVar1`,
-  `undefined4` are automatic and meaningless.
-- Back every claim about behavior with an address/line. No evidence → no claim.
-- Read constants from values (`DAT_* = 500` → a limit); recognise known magics
-  (`0x5A4D` = "MZ"), verify the rest.
-- Keep guesses from names/strings in a separate "Hypotheses (unverified)" section.
+1. Read decompile.yaml (its comments explain each key), NOTES.md and the last
+   entries of LOG.md. If plan/ exists, read plan.md of the last phase (highest
+   number) and say in one line where the research stands; for anything about
+   the plan use /re-plan.
+2. If decompile.yaml is missing, ask for the binary and run `re init <path>`.
 
-## Tools (run via Bash)
+## Project layout
 
-- `file <bin>` — identify first (native ELF/PE, .NET, frozen Python, Delphi/TD32).
-- `exportjson.sh <bin> out.json` — machine-readable export of all functions
-  (signature, call graph, strings/data with addresses, pseudocode). Main source.
-- `outq` — query out.json instead of parsing it yourself: `outq info` first (counts,
-  whether real names are present, entry points, which binary it belongs to), then
-  `outq ls [regex]`, `outq roots`, `outq show <name> [from:to]`, `outq grep <regex>`,
-  `outq strings [regex]`, `outq imports`. `outq --help` describes the JSON format.
-- `contextpack.sh <bin> out.md [filter]` — same, readable, for one function.
-- `decompile-dotnet.sh <asm>` (.NET→C#), `unfreeze-python.sh <app>` (frozen Python).
-- `td32-import <App.exe>` — Delphi/C++Builder: real procedure names from TD32.
-
-## Workflow (selective, recursive)
-
-1. `file` → if native, `exportjson.sh` → `outq info`. The binary may be in
-   `target/` or in the project directory; `outq target` prints its path.
-   out.json is a JSON list (one object per function), not an object. If
-   `outq info` reports real names, use them: Ghidra already read the symbols.
-2. Pick an entry point (e.g. `main`) and follow `callees` to a chosen depth. Skip
-   thunks/external stubs; do the relevant subgraph, not everything.
-3. Process callees before callers: each function's summary feeds upward as
-   context (recursive grounding).
-4. For each function write its card `review/<name>.md` in the format of the
-   /re-code skill: purpose, signature, data, a readable version of the code
-   (meaningful names + comments), and a Hypotheses section.
-
-## Write it down, in the right place
-
-The user keeps what is in the project folder, not what was said in chat. Whenever
-you work something out, save it. Never leave anything worth keeping only in /tmp
-or a scratchpad: extracted tables, disassembly listings and helper scripts that
-were needed for a result go to `work/`.
-
-| What | Where | Written by |
+| Path | What | Who writes |
 | --- | --- | --- |
-| One function: purpose, signature, data, readable code | `review/<function>.md` (card) | /re-code, the workflow above; updated by /re-explain and /re-port |
-| Answer to "how does X work", with checked claims | `explain/<topic>.md` | /re-explain |
-| Python version or simulation of a feature, with its test | `reimpl/` | /re-port |
-| The whole program: components, runtime, data | `ARCHITECTURE.md` | /re-doc |
-| Modules and functions as a map | `map/` | /re-map |
-| Facts about the whole project, decisions, session log | `NOTES.md` | you and the user |
-| Extracted tables, listings, one-off helper scripts | `work/` | you |
+| decompile.yaml | binaries (path, type, export), which one is `current`, settings | scripts (binaries); the user; you only after asking |
+| out.<id>.json | export of one binary; read it only with outq | exportjson.sh |
+| ghidra/ | the one Ghidra project, ghidra/project.gpr; each binary is a program named by its id | scripts, Ghidra |
+| src/<id>/ | recovered source (.NET, Python) | decompile-dotnet.sh, unfreeze-python.sh |
+| work/ | scripts, extracted tables, captured runs (CSV, Parquet); never only /tmp | you |
+| tools/queries.sql | this project's saved DuckDB queries | you, with approval |
+| NOTES.md | the user's purpose, knowledge and agreements on scope | the user; you only after asking |
+| LOG.md | a few lines per session: what was looked at, which cards, what is open | you |
+| review/<id>/ | one card per function of that binary (source of truth) | you; "My notes" = user |
+| plan/NN-<phase>/ | research plan, only when the user wants one | /re-plan |
+| docs/ | results: ARCHITECTURE.md, map/, explain/, spec/, walkthrough/ | skills, you |
 
-A card has two parts. `## Analysis` is yours: keep it current, mark every item
-[C] or [H]. `## My notes` is the user's: never edit it, and what it says wins
-over your reading. When you answer a question about a function in chat and
-learned something new about it, add it to the card's Analysis.
+Three kinds of files: research data (decompile.yaml, exports, ghidra/, src/,
+work/, tools/), working knowledge (NOTES.md, LOG.md, review/, plan/) and
+results (docs/). Knowledge lives in review/; docs/ is derived from it and never
+holds the only copy of a finding.
 
-## Live loop (if GhidraMCP tools are available)
+## Ask before you change these
 
-With the `ghidra` MCP server, don't just describe — improve the decompilation:
-rename variables/functions, set prototypes, **create and apply structs/types**
-(`create_struct`, `add_struct_field`, `apply_data_type`, `set_function_prototype`),
-then RE-DECOMPILE and read the cleaner output. Repeat until `uVar`/`undefined` are
-gone. Query xrefs/memory before each claim. Reads run automatically; changes are
-prompted (`.claude/settings.json`).
+Ask in the conversation and wait for the answer before you change NOTES.md, a
+setting, `current` or a binary's `type` in decompile.yaml, the goal or the tasks
+of a plan, or tools/queries.sql. An approval prompt from Claude Code does not
+replace the question: it may not appear. Cards, LOG.md, work/ and task detail
+files you write without asking.
 
-## Status of claims
+## Environment
 
-Mark every claim [C] confirmed (evidence you cite, or the user's notes) or
-[H] hypothesis. "Hypotheses (unverified)" sections hold the [H] items.
-What the user wrote (`## My notes` in a card, NOTES.md) wins over your own
-reading. Your own earlier Analysis does not: re-check it when a new claim
-depends on it.
+- Binaries can be anywhere; decompile.yaml has the paths. Always name the
+  binary explicitly in commands (`outq -b app ...`, `exportjson.sh app`).
+  `current` is for the user and for the program open in Ghidra.
+- `re status` shows binaries, settings and next steps; `re get <key>` reads one
+  value; `re use` and `re set` change them (see "Ask before you change these").
+- Settings (empty = default): `lang_docs` and `lang_walkthrough` (language of
+  files; default: the language the user writes in), `ghidra_live` (use the
+  Ghidra MCP server; default false).
+- outq is instant: use it for all reading: `info`, `roots`, `ls [regex]`,
+  `show NAME [A:B]` (first 150 lines unless a range is given), `grep`,
+  `strings`, `imports`. Never load an export whole.
+- Anything else: `outq sql "<query>"` (DuckDB, read-only: SELECT and EXPLAIN;
+  files only under work/) with the tables functions, calls (bin, src, dst) and
+  strings (bin, function, addr, value), over all binaries. A query likely needed again goes into tools/queries.sql as a macro
+  with a comment and a line `-- Example: ...`, then `outq selftest`. Do not
+  write your own parsers of the exports.
+- Exporting (`exportjson.sh <id>`, `re init`) takes minutes. Scripts cannot
+  open ghidra/project.gpr while the Ghidra window has it open; they say so.
+- With `ghidra_live`: read names and current code from Ghidra; the export does
+  not see changes made there. Re-export only when you need the export to
+  reflect them (outq sql, a skill over many functions): ask the user to close
+  the project in Ghidra, run `exportjson.sh <id>`, and reopen it.
 
-## Native Linux targets (.so, ELF)
+## Binary types
 
-These can run here, so verify by running: call an exported function through
-ctypes, trace with `ltrace` / `strace`, or break in `gdb`. A claim checked
-against real behaviour beats one read from pseudocode.
-Function names in out.json are namespace-qualified (`Class::method`).
+| type | Path |
+| --- | --- |
+| native-elf, native-pe | export + outq; everything below applies |
+| delphi | as native; read .claude/kb/delphi.md first |
+| dotnet, python-frozen | recovered source in src/<id>/; cite file:line instead of addresses |
+| packed, installer | unpack first (on a copy), then `re init` the result |
 
-## Skills in this project (.claude/skills)
+## Evidence (non-negotiable)
 
-The re-* skills are for binaries without source code (they read Ghidra's out.json).
+- Reason from pseudocode and data, never from names. FUN_*, uVar1, undefined4
+  mean nothing.
+- Names are not evidence, whatever their source:
+  - names you or the user gave in Ghidra are earlier hypotheses; check the
+    code again before building on them,
+  - names from debug info (TD32, PDB, symbols) are the author's names: they
+    identify a function, but what it does still comes from the code.
+- Every claim about behaviour cites an address (or file:line). No evidence,
+  no claim.
+- Read constants from their values (`DAT_* = 500` is a limit); recognise
+  known magics (`0x5A4D` = "MZ"), verify the rest.
+- Mark [C] confirmed (evidence you cite, or the user's notes) or [H]
+  hypothesis. Guesses from names or strings go under "Hypotheses (unverified)".
+- What the user wrote (NOTES.md, "My notes") wins over your reading. Your own
+  earlier Analysis does not: re-check it when a new claim depends on it.
+- Say so when you find something the user needs to know: a wrong assumption,
+  a contradiction with NOTES.md or with an earlier card.
+- The strongest check is behaviour (running, ctypes, strace, gdb, emulation).
+  Propose it when it would settle a question; run only with approval.
 
-- /re-code <function> [--depth N] - readable code and a card for a function (review/)
-- /re-port <feature> - Python version or simulation of a feature, compared with the original (reimpl/)
-- /re-explain <function or question> - how one part works, every claim verified (explain/)
-- /re-map - interactive map of modules and functions (map/index.html)
-- /re-doc - how the whole program or library is built and runs (ARCHITECTURE.md)
-Other skills may be present in .claude/skills; their descriptions say when to use
-them. Use a skill when the user asks for what it does; otherwise follow the
-workflow above.
+## How to work
+
+1. Purpose: if NOTES.md has none and the answer would change how you work,
+   ask once. Otherwise start.
+2. Top-down: what the binary offers to the outside (`outq -b <id> roots`),
+   then the components, then functions. Callees before callers. Only what the
+   question needs; skip thunks and library code.
+3. Answer in the chat, concretely, with addresses. Ask when an answer would
+   change what you do; one or two questions at a time.
+4. At the end: update cards for functions where you found something with
+   evidence, and write what is only likely as [H]; all at once, named in one
+   line. Add a few lines to LOG.md (date, what, cards, open; the plan task, e.g.
+   02/B, when the work was for one).
+
+Card review/<id>/<name>.md (characters other than letters, digits, . _ -
+replaced by _):
+
+    # <full name> @ 0x<address>
+    ## Analysis      (yours; keep current, mark [C] / [H])
+    ## My notes      (the user's; never edit)
+
+## Ghidra (only with ghidra_live)
+
+Rename, retype or create structures only when the user asks or agrees, one
+task at a time (e.g. "clean up the header parser"); say first what you will
+change. Changes in Ghidra always ask for approval.
+
+## Skills
+
+Default is an answer in the chat. Use a skill only when the user wants a
+document, a map, a verification, a walkthrough, a specification or a plan:
+/re-doc, /re-map, /re-explain, /re-walkthrough, /re-spec, /re-plan. When a
+lasting document would clearly help, offer it in one line.

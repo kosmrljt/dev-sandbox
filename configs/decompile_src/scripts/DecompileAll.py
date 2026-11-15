@@ -1,7 +1,7 @@
-# DecompileAll.py — Ghidra post-script (runs inside Ghidra's Python/Jython).
-# Decompiles every function in the loaded program to C and writes one file.
+# DecompileAll.py — PyGhidra script: decompile every function to C into one file.
 #
-# Invoked by decompile.sh via:  -postScript DecompileAll.py <output.c>
+# Run through decompile.sh (pyghidra launcher, project ghidra/ of the project).
+# Args: <output.c>
 
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor

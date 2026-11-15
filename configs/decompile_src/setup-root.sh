@@ -18,6 +18,11 @@
 
 set -euxo pipefail
 
+#settign for tempporaray files
+export HOME=/tmp/root-home
+mkdir -p "$HOME"
+export PIP_BREAK_SYSTEM_PACKAGES=1
+
 CTX=/opt/ctx                 # where the Dockerfile COPYed this directory
 VENDOR="$CTX/vendor"
 mkdir -p /usr/local/bin /usr/share/applications
@@ -32,9 +37,16 @@ gh_asset() {  # gh_asset <owner/repo> <regex> — print first matching asset URL
 
 
 # --- Ghidra ------------------------------------------------------------------
+# Pinning: set GHIDRA_URL (a release .zip) and GHIDRA_SHA256 to build the same
+# Ghidra every time; without them the latest release is taken (and the GhidraMCP
+# plugin below is built against whatever that is).
+GHIDRA_URL="${GHIDRA_URL:-}"
+GHIDRA_SHA256="${GHIDRA_SHA256:-}"
 GHIDRA_ZIP="$(ls "$VENDOR"/ghidra_*_PUBLIC_*.zip 2>/dev/null | head -n1 || true)"
 if [[ -n "$GHIDRA_ZIP" ]]; then echo "Using local Ghidra: $GHIDRA_ZIP"; cp "$GHIDRA_ZIP" /tmp/ghidra.zip
+elif [[ -n "$GHIDRA_URL" ]]; then dl "$GHIDRA_URL" /tmp/ghidra.zip
 else dl "$(gh_asset NationalSecurityAgency/ghidra 'ghidra_[^"]*_PUBLIC_[^"]*\.zip')" /tmp/ghidra.zip; fi
+if [[ -n "$GHIDRA_SHA256" ]]; then echo "$GHIDRA_SHA256  /tmp/ghidra.zip" | sha256sum -c -; fi
 unzip -q /tmp/ghidra.zip -d /opt
 mv /opt/ghidra_*_PUBLIC /opt/ghidra
 rm /tmp/ghidra.zip
@@ -50,10 +62,11 @@ ln -sf /opt/ghidra/ghidraRun /usr/local/bin/ghidraRun
 PYG_DIST="$(ls -d /opt/ghidra/Ghidra/Features/PyGhidra/pypkg/dist 2>/dev/null | head -n1 || true)"
 if [[ -n "$PYG_DIST" ]]; then
     pip install --break-system-packages --no-index -f "$PYG_DIST" pyghidra \
-        || pip install --break-system-packages pyghidra || true
+        || pip install --break-system-packages pyghidra
 else
-    pip install --break-system-packages pyghidra || true
+    pip install --break-system-packages pyghidra
 fi
+# Not best-effort: without pyghidra no export script works, so the build stops here.
 
 # --- .NET SDK + ilspycmd (C# CLI decompiler) ---------------------------------
 export DOTNET_ROOT=/opt/dotnet
@@ -91,8 +104,17 @@ rm -rf /tmp/pycdc
 # helper expects it.
 # Best-effort: if the build can't fetch its deps, MCP is simply absent (see
 # docs/GUIDE.md to build it by hand).
+# Pinning: set GHIDRA_MCP_REF to a commit or tag. This is third-party code that is
+# built as root and runs as an MCP server with write access to Ghidra; without a
+# pin the build takes whatever is on the default branch that day.
+GHIDRA_MCP_REF="${GHIDRA_MCP_REF:-}"
 ( pip install --break-system-packages uv || true
-  git clone --depth 1 https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
+  if [[ -n "$GHIDRA_MCP_REF" ]]; then
+      git clone https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
+      git -C /tmp/ghidra-mcp-b checkout --detach "$GHIDRA_MCP_REF"
+  else
+      git clone --depth 1 https://github.com/bethington/ghidra-mcp /tmp/ghidra-mcp-b
+  fi
   cd /tmp/ghidra-mcp-b
   # Copy the installed Ghidra's jars into ~/.m2 (local, no network), then build.
   python3 -m tools.setup ensure-prereqs --ghidra-path /opt/ghidra
@@ -105,9 +127,10 @@ rm -rf /tmp/pycdc
   echo "GhidraMCP (bethington) installed: extension + bridge-mcp-ghidra" ) \
   || echo "WARN: GhidraMCP (bethington) not installed - see docs/GUIDE.md to build it manually"
 
-# --- Python analysis libraries (used by review/ and python/ helper scripts) ---
-# numpy/pillow/matplotlib: arrays, image handling, plots (COP curves, trajectories).
-# opencv-python-headless: pixel-diff a screenshot against a reconstruction.
+# --- Python analysis libraries (used by helper scripts in work/) --------------
+# numpy/scipy/matplotlib: numeric analysis and plots of extracted data.
+# pillow/opencv-python-headless: image handling and comparison (e.g. output vs. original).
+# duckdb: `outq sql` (SQL over the exports) and tables in work/ (CSV, Parquet).
 # pefile/lief: parse PE sections/resources (Delphi .dfm forms + strings live in
 # resources and point at event handlers -> good entry points). capstone: quick
 # disassembly without Ghidra. unicorn: CPU emulation of single functions.
@@ -116,6 +139,17 @@ pip install --break-system-packages \
     numpy pillow matplotlib opencv-python-headless \
     pefile capstone lief pyinstxtractor-ng unicorn \
     scipy || true
+pip install --break-system-packages duckdb   # outq sql needs it: not best-effort
+
+# --- yq (mikefarah, v4): reads and writes decompile.yaml, keeping comments ------
+# Not the Fedora/Debian "yq" package: that is a different tool (a jq wrapper)
+# with another syntax that drops comments when it writes. Pinned with a checksum.
+YQ_VER=v4.44.3
+YQ_SHA=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
+if [[ -f "$VENDOR/yq_linux_amd64" ]]; then cp "$VENDOR/yq_linux_amd64" /tmp/yq
+else dl "https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64" /tmp/yq; fi
+echo "${YQ_SHA}  /tmp/yq" | sha256sum -c -
+install -m755 /tmp/yq /usr/local/bin/yq && rm -f /tmp/yq
 
 # =============================================================================
 # GUI decompile tools (for the VNC desktop). Best-effort: a changed URL won't

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walkthrough</title>
+<style>
+ :root{--ink:#1d1d1f;--muted:#6b6f76;--line:#d9dce1;--accent:#1a5fb4;--bg:#fff;--soft:#f5f6f8}
+ *{box-sizing:border-box} html,body{height:100%}
+ body{margin:0;font:16px/1.55 system-ui,sans-serif;color:var(--ink);background:var(--bg);display:grid;grid-template-columns:250px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
+ header{grid-column:1/3;padding:12px 20px;border-bottom:1px solid var(--line)}
+ header h1{font-size:18px;margin:0} header p{margin:2px 0 0;color:var(--muted);font-size:14px}
+ nav{border-right:1px solid var(--line);overflow:auto;padding:10px 0;background:var(--soft)}
+ nav button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 16px;font:14px system-ui;color:var(--ink);cursor:pointer;border-left:3px solid transparent}
+ nav button.on{border-left-color:var(--accent);background:#fff;font-weight:600}
+ nav button .n{color:var(--muted);margin-right:6px}
+ main{overflow:auto;padding:24px 32px}
+ main h2{font-size:22px;margin:0 0 10px}
+ .text{max-width:760px} .text p{margin:10px 0}
+ .figure{margin:18px 0;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--soft);overflow:auto;max-width:900px}
+ .figure svg,.figure img{max-width:100%;height:auto;display:block;margin:auto}
+ pre{background:#f1f2f4;padding:12px;border-radius:6px;overflow:auto;font-size:13.5px;max-width:900px}
+ .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:9px;margin-left:8px;vertical-align:middle}
+ .tag.h{background:#fdf0d5} .tag.c{background:#dff3e4} .tag.i{background:#e8e8ee}
+ .ref{color:var(--muted);font-size:13px;margin-top:14px}
+ footer{grid-column:1/3;border-top:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:12px}
+ footer button{font:15px system-ui;padding:6px 14px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+ footer button:disabled{opacity:.4;cursor:default}
+ #bar{flex:1;height:4px;background:var(--line);border-radius:2px;overflow:hidden} #bar i{display:block;height:100%;background:var(--accent);width:0}
+ #pos{color:var(--muted);font-size:14px;min-width:60px;text-align:right}
+ @media (max-width:760px){body{grid-template-columns:1fr} nav{display:none} header,footer{grid-column:1}}
+</style></head><body>
+<header><h1 id="title"></h1><p id="subtitle"></p></header>
+<nav id="nav"></nav>
+<main><h2 id="h"></h2><div class="text" id="text"></div><div id="fig"></div><div id="code"></div><div class="ref" id="ref"></div></main>
+<footer><button id="prev">&larr; Back</button><button id="next">Next &rarr;</button><div id="bar"><i></i></div><span id="pos"></span></footer>
+<script>
+/* Fill in TITLE, SUBTITLE and STEPS. Each step:
+     title   short heading
+     text    HTML: a few short paragraphs in plain words (required)
+     figure  optional HTML: an inline <svg>, a small table, or <img src="data:...">
+     code    optional string: a few lines of code or data, shown as-is
+     status  optional: 'confirmed' | 'hypothesis' | 'illustration'
+     ref     optional small print, e.g. where in the binary this happens
+   Keep one concrete example running through all steps. No external files. */
+const TITLE = 'How a value is looked up';
+const SUBTITLE = 'Example walkthrough - replace with your topic';
+const STEPS = [
+  {title: 'What goes in',
+   text: '<p>The caller passes a table and a name. The table holds a count and a list of fixed-size records.</p>',
+   figure: '<svg viewBox="0 0 420 70" width="420"><rect x="5" y="15" width="90" height="40" fill="#fff" stroke="#888"/><text x="50" y="40" text-anchor="middle" font-size="13">count = 3</text><rect x="110" y="15" width="90" height="40" fill="#eaf1fb" stroke="#1a5fb4"/><text x="155" y="40" text-anchor="middle" font-size="13">record 0</text><rect x="205" y="15" width="90" height="40" fill="#eaf1fb" stroke="#1a5fb4"/><text x="250" y="40" text-anchor="middle" font-size="13">record 1</text><rect x="300" y="15" width="90" height="40" fill="#eaf1fb" stroke="#1a5fb4"/><text x="345" y="40" text-anchor="middle" font-size="13">record 2</text></svg>',
+   status: 'confirmed'},
+  {title: 'Compare one record',
+   text: '<p>The name at the start of the record is compared with the name we are looking for.</p>',
+   code: 'record 1 name: "ANA"\nsearched name: "ANA"   -> equal',
+   status: 'confirmed', ref: 'small print: where this happens'},
+  {title: 'Result',
+   text: '<p>The first matching record is returned. If none matches, the result is "not found".</p>',
+   status: 'hypothesis'}
+];
+
+const $ = id => document.getElementById(id);
+const LABEL = {confirmed: ['c', 'confirmed'], hypothesis: ['h', 'hypothesis'], illustration: ['i', 'illustration']};
+let cur = 0;
+function show(i) {
+  cur = Math.max(0, Math.min(STEPS.length - 1, i)); const s = STEPS[cur];
+  const t = LABEL[s.status]; $('h').innerHTML = ''; $('h').textContent = (cur + 1) + '. ' + s.title;
+  if (t) { const b = document.createElement('span'); b.className = 'tag ' + t[0]; b.textContent = t[1]; $('h').appendChild(b); }
+  $('text').innerHTML = s.text || '';
+  $('fig').innerHTML = s.figure ? '<div class="figure">' + s.figure + '</div>' : '';
+  $('code').innerHTML = ''; if (s.code) { const p = document.createElement('pre'); p.textContent = s.code; $('code').appendChild(p); }
+  $('ref').textContent = s.ref || '';
+  document.querySelectorAll('nav button').forEach((b, k) => b.classList.toggle('on', k === cur));
+  $('prev').disabled = cur === 0; $('next').disabled = cur === STEPS.length - 1;
+  $('pos').textContent = (cur + 1) + ' / ' + STEPS.length;
+  document.querySelector('#bar i').style.width = ((cur + 1) / STEPS.length * 100) + '%';
+  document.querySelector('main').scrollTop = 0;
+  try { history.replaceState(null, '', '#' + (cur + 1)); } catch (e) {}
+}
+document.title = TITLE; $('title').textContent = TITLE; $('subtitle').textContent = SUBTITLE;
+STEPS.forEach((s, k) => { const b = document.createElement('button'); const n = document.createElement('span'); n.className = 'n'; n.textContent = (k + 1) + '.';
+  b.appendChild(n); b.appendChild(document.createTextNode(s.title)); b.onclick = () => show(k); $('nav').appendChild(b); });
+$('prev').onclick = () => show(cur - 1); $('next').onclick = () => show(cur + 1);
+document.addEventListener('keydown', e => { if (e.key === 'ArrowRight' || e.key === 'PageDown') show(cur + 1); if (e.key === 'ArrowLeft' || e.key === 'PageUp') show(cur - 1); });
+show((parseInt(location.hash.slice(1), 10) || 1) - 1);
+</script></body></html>

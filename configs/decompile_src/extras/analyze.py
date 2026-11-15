@@ -15,14 +15,19 @@ Selection (choose one; default = non-thunk, non-external functions):
 
 Examples:
   export ANTHROPIC_API_KEY=sk-...
-  analyze.py --in legacy.json --seed main --depth 2 --out review/
-  analyze.py --in legacy.json --func parse --out review/
-  analyze.py --in legacy.json --seed main --depth 3 --list   # dry run, no API
+  python3 /opt/ctx/extras/analyze.py --in out.app.json --seed main --depth 2
+  python3 /opt/ctx/extras/analyze.py --in out.app.json --func parse
+  python3 /opt/ctx/extras/analyze.py --in out.app.json --seed main --depth 3 --list   # dry run
+
+Output goes to analyze/ (never review/: the cards there hold your notes).
+Existing files are kept. Optional extra: not part of the normal workflow,
+needs ANTHROPIC_API_KEY and "pip install anthropic", billed separately.
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 
 MODEL_DEFAULT = "claude-sonnet-5-5"   # balanced; --model claude-opus-5-5 for hard targets
@@ -77,10 +82,13 @@ def select(funcs_by_name, args):
     if args.seed:
         if args.seed not in funcs_by_name:
             sys.exit("Seed '%s' ni v JSON." % args.seed)
+        # Breadth-first: every function is reached at its smallest depth first,
+        # so a function found deep via one path is still expanded via a shorter one.
+        from collections import deque
         seen = set()
-        frontier = [(args.seed, 0)]
+        frontier = deque([(args.seed, 0)])
         while frontier:
-            n, d = frontier.pop()
+            n, d = frontier.popleft()
             if n in seen or n not in funcs_by_name:
                 continue
             seen.add(n)
@@ -117,7 +125,7 @@ def order_callees_first(selected, funcs_by_name):
 def main():
     ap = argparse.ArgumentParser(description="Selective AI pass over Ghidra JSON.")
     ap.add_argument("--in", dest="infile", required=True, help="functions.json from ExportJson.py")
-    ap.add_argument("--out", default="review", help="output directory")
+    ap.add_argument("--out", default="analyze", help="output directory (never review/: cards hold the user's notes)")
     ap.add_argument("--seed", help="start function for recursive selection")
     ap.add_argument("--depth", type=int, default=2, help="callee depth for --seed")
     ap.add_argument("--func", help="only functions whose name contains this")
@@ -177,8 +185,12 @@ def main():
                 summaries[name] = line.split("SUMMARY:", 1)[1].strip()
                 break
 
-        safe = name.replace("/", "_")
-        with open(os.path.join(args.out, safe + ".md"), "w") as fo:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)   # same file naming as the cards
+        path = os.path.join(args.out, safe + ".md")
+        if os.path.exists(path):
+            print("  = %s exists, kept (delete it to regenerate)" % path)
+            continue
+        with open(path, "w") as fo:
             fo.write("# %s @ %s\n\n%s\n" % (name, fn["address"], text))
         combined.append("## %s @ %s\n\n%s" % (name, fn["address"], text))
 

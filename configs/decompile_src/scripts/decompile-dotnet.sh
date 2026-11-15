@@ -1,32 +1,24 @@
 #!/usr/bin/env bash
 # decompile-dotnet.sh — decompile a .NET assembly (C#) with ilspycmd.
 #
-# Use this when `file <binary>` says the PE is a .NET assembly
-# (e.g. "Mono/.Net assembly"). Works for .dll and .exe, Windows- or
-# Linux-built — .NET assemblies are PE format on both.
+# Use it when re init (or `file`) says the binary is a .NET assembly. Works for
+# .dll and .exe, Windows- or Linux-built.
 #
-# Usage:  decompile-dotnet.sh <assembly.dll|exe> [output_dir]
-
+# Usage:  decompile-dotnet.sh [id|assembly] [output_dir]
+#   default output: src/<id>/  (recorded in decompile.yaml as binaries.<id>.src)
 set -euo pipefail
 
-ASM="${1:?usage: decompile-dotnet.sh <assembly.dll|exe> [output_dir]}"
-OUT="${2:-${ASM%.*}_cs}"
-
-if [[ ! -f "$ASM" ]]; then
-    echo "No such file: $ASM" >&2
-    exit 1
-fi
+IFS=$'\t' read -r ID ASM < <(re resolve "${1:-}")
+OUT="${2:-src/$ID}"
+[[ -f "$ASM" ]] || { echo "No such file: $ASM" >&2; exit 1; }
 
 echo "== What is this file? =="
 file "$ASM" || true
-echo
-
 mkdir -p "$OUT"
 echo "== Decompiling to C# with ilspycmd =="
-# -p : split into one .csproj + per-type files (nicer for reading & for agents)
+# -p : one .csproj + one file per type (easier to read and to search)
 ilspycmd -p -o "$OUT" "$ASM"
+re set "binaries.$ID.src" "$OUT" >/dev/null
 
 echo
 echo "== Done. C# project written to: $OUT =="
-echo "Tip: open the .csproj tree, or hand a file to an agent:"
-echo "  'Explain this class and what the program does; flag any obfuscated names.'"

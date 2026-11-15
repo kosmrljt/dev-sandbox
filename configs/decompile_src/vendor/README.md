@@ -8,6 +8,8 @@ download from the official sources at build time.
 - `pycdc/` — a local checkout of https://github.com/zrax/pycdc (built here).
 - `dotnet/` — a pre-extracted .NET SDK dir (copied to /opt/dotnet). Advanced;
   normally the .NET install script from dot.net is fine.
+- `yq_linux_amd64` — mikefarah yq v4.44.3 (checked against the pinned sha256 in
+  setup-root.sh). Used instead of the GitHub release.
 - GUI tools (optional, for offline): `Cutter-*Linux-x86_64.AppImage`,
   `imhex-*x86_64.AppImage`, `jadx-*.zip`.
 # Note: GhidraMCP (bethington fork) is built from source at image-build time

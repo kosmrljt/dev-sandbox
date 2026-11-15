@@ -5,15 +5,17 @@ Deterministic: the same inputs always give the same page. All interpretation
 lives in modules.json (written by Claude via the /re-map skill, or by hand).
 
 Inputs
-  out.json       Ghidra export from exportjson.sh (facts: functions, calls, strings)
+  export         Ghidra export from exportjson.sh (out.<id>.json) (facts: functions, calls, strings)
   modules.json   modules, external resources, data flows (interpretation + evidence)
-  review/        optional notes, review/<function name>.md, shown in the side panel
+  review/<id>/   optional cards, review/<id>/<function name>.md, shown in the side panel
 
 Usage
-  archmap.py [--export out.json] [--modules map/modules.json] [--review review]
-             [--out map/index.html] [--check]
+  archmap.py [--export FILE] [--modules docs/map/modules.json] [--review DIR]
+             [--out docs/map/index.html] [--check]
+  defaults for --export and --review: the current binary in decompile.yaml
+  (its export, review/<id>/), else out.json and review/
 
-  --check   validate modules.json against out.json and exit (no HTML)
+  --check   validate modules.json against the export and exit (no HTML)
 """
 
 import argparse
@@ -21,6 +23,27 @@ import html
 import json
 import os
 import sys
+
+
+def _outq(*args):
+    """Ask outq about the project (decompile.yaml); None when that is not possible."""
+    import subprocess
+    try:
+        r = subprocess.run(["outq"] + list(args), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def default_export():
+    return _outq("path") or "out.json"
+
+
+def default_review():
+    bid = _outq("id")
+    if bid and os.path.isdir(os.path.join("review", bid)):
+        return os.path.join("review", bid)
+    return "review"
 
 STATUSES = ("confirmed", "hypothesis")
 WARNINGS = []
@@ -469,12 +492,14 @@ overview();
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--export", default="out.json")
-    ap.add_argument("--modules", default="map/modules.json")
-    ap.add_argument("--review", default="review")
-    ap.add_argument("--out", default="map/index.html")
+    ap.add_argument("--export", default=None)
+    ap.add_argument("--modules", default="docs/map/modules.json")
+    ap.add_argument("--review", default=None)
+    ap.add_argument("--out", default="docs/map/index.html")
     ap.add_argument("--check", action="store_true")
     a = ap.parse_args()
+    a.export = a.export or default_export()
+    a.review = a.review or default_review()
 
     export = load_json(a.export)
     mods = load_json(a.modules)

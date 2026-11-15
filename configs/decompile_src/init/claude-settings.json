@@ -8,9 +8,20 @@
       "Bash(objdump *)",
       "Bash(strings *)",
       "Bash(outq *)",
+      "Bash(re status)",
+      "Bash(re get *)",
+      "Bash(re path *)",
+      "Bash(re export *)",
       "Bash(exportjson.sh *)",
       "Bash(contextpack.sh *)",
-      "Bash(decompile.sh *)"
+      "Bash(decompile.sh *)",
+      "Edit(review/**)",
+      "Edit(work/**)",
+      "Edit(LOG.md)",
+      "Edit(plan/**)"
+    ],
+    "ask": [
+      "Edit(plan/**/plan.md)"
     ]
   }
 }

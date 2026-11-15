@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """archdoc.py - check ARCHITECTURE.md and render it as a web page.
 
-  archdoc.py --check   structure, statuses, evidence, names vs out.json / modules.json
-  archdoc.py --html    check, then write map/architecture.html (Markdown + Mermaid)
+  archdoc.py --check   structure, statuses, evidence, names vs the exports / modules.json
+  archdoc.py --html    check, then write docs/map/architecture.html (Markdown + Mermaid)
 
-Options: --doc ARCHITECTURE.md --export out.json --modules map/modules.json
-         --out map/architecture.html
+Options: --doc docs/ARCHITECTURE.md --export FILE (default: exports of all binaries)
+         --modules docs/map/modules.json --out docs/map/architecture.html
 
 Sections are found by number ("## 1." ... "## 9."), so the prose may be in any
 language. ERRORs exit with code 2; WARNINGs are printed but do not fail.
@@ -17,6 +17,34 @@ import json
 import os
 import re
 import sys
+
+
+def _outq(*args):
+    """Ask outq about the project (decompile.yaml); None when that is not possible."""
+    import subprocess
+    try:
+        r = subprocess.run(["outq"] + list(args), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def default_export():
+    return _outq("path") or "out.json"
+
+
+def all_exports():
+    """The program is described as a whole: names from the exports of all binaries."""
+    out = _outq("path", "--all")
+    files = [l.split("\t", 1)[1] for l in out.splitlines() if "\t" in l] if out else []
+    return files or ["out.json"]
+
+
+def default_review():
+    bid = _outq("id")
+    if bid and os.path.isdir(os.path.join("review", bid)):
+        return os.path.join("review", bid)
+    return "review"
 
 REQUIRED = {1: "Summary", 2: "Context", 3: "Archetype", 4: "Components", 5: "Runtime",
             6: "Data", 7: "Notable details", 8: "Hypotheses and open questions", 9: "Next steps"}
@@ -114,11 +142,11 @@ def check(doc, export_names, module_ids):
         for name, addr in FUNC.findall(doc):
             seen.add(name)
             if name not in export_names:
-                warns.append("`%s` @ %s: no function with that name in out.json "
+                warns.append("`%s` @ %s: no function with that name in the exports "
                              "(renamed later? re-export)" % (name, addr))
         for m in sorted(set(x.group(0) for x in AUTO.finditer(doc))):
             if m.startswith(("FUN_", "thunk_FUN_")) and m not in export_names and m not in seen:
-                warns.append("%s not in out.json" % m)
+                warns.append("%s not in the exports" % m)
 
     if len(STATUS.findall(doc)) == 0:
         errs.append("no [C]/[H] status anywhere")
@@ -179,15 +207,16 @@ if (window.mermaid) {
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--doc", default="ARCHITECTURE.md")
-    ap.add_argument("--export", default="out.json")
-    ap.add_argument("--modules", default="map/modules.json")
-    ap.add_argument("--out", default="map/architecture.html")
+    ap.add_argument("--doc", default="docs/ARCHITECTURE.md")
+    ap.add_argument("--export", default=None)
+    ap.add_argument("--modules", default="docs/map/modules.json")
+    ap.add_argument("--out", default="docs/map/architecture.html")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--html", action="store_true")
     a = ap.parse_args()
     if not (a.check or a.html):
         a.check = True
+    exports = [a.export] if a.export else all_exports()
 
     try:
         with open(a.doc, encoding="utf-8") as f:
@@ -196,9 +225,10 @@ def main():
         print("archdoc: not found: " + a.doc, file=sys.stderr)
         sys.exit(1)
     names = None
-    if os.path.isfile(a.export):
-        with open(a.export, encoding="utf-8") as f:
-            names = {fn["name"] for fn in json.load(f)}
+    for e in exports:
+        if os.path.isfile(e):
+            with open(e, encoding="utf-8") as f:
+                names = (names or set()) | {fn["name"] for fn in json.load(f)}
     mids = None
     if os.path.isfile(a.modules):
         with open(a.modules, encoding="utf-8") as f:

@@ -1,4 +1,4 @@
-# ContextPack.py — Ghidra post-script: emit GROUNDED context packs per function.
+# ContextPack.py — PyGhidra script: emit GROUNDED context packs per function.
 #
 # For each function it writes: signature, callers, callees, referenced strings
 # and data/globals (with real addresses + values), and the decompiled C. This
@@ -6,7 +6,7 @@
 # function names or strings alone.
 #
 # Args: <output.md> [name_substring_filter]
-#   e.g. -postScript ContextPack.py /work/out.md parse_header
+#   run through contextpack.sh <id> [output.md] [filter]
 
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
@@ -44,7 +44,7 @@ def refs_in_function(func):
                 val = d.getValue()
             except:
                 val = None
-            if "string" in dt.lower() or "char" in dt.lower():
+            if any(k in dt.lower() for k in ("string", "char", "unicode")):
                 strings.append((to, val))
             else:
                 datas.append((to, dt, label, val))

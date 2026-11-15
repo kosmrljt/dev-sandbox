@@ -1,31 +1,34 @@
 ---
 name: re-explain
-description: For a compiled binary without source code - explain how one part of the analyzed program works (a function, a group of functions, a file format, a feature such as "how saving works"), write the explanation to a Markdown file under explain/, and verify every claim independently before presenting it. Use when the user asks how something works, what a function or feature does, or why the code does something.
-argument-hint: "<function | address | feature question> [--lang sl|en]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(contextpack.sh *), Bash(outq *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-explain/*), Bash(rabin2 *), Bash(readelf *), Bash(file *)
+description: For a compiled binary without source code - verify how one part of the analyzed program works (a function, a group of functions, a file format, a feature). Every claim is numbered, checked independently and reviewed by a fresh agent; the result is docs/explain/<topic>.md. Use ONLY when the user asks to verify, check precisely, be exact or thorough, or prove it, or when the result will be the basis of a fix or a specification. An ordinary "how does this work" question is answered in the chat; "show me step by step" is /re-walkthrough.
+argument-hint: "<function | address | feature question> [--bin id] [--lang sl|en]"
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-explain/*), Bash(rabin2 *), Bash(readelf *), Bash(file *)
 ---
 
 # /re-explain - how one part of the analyzed binary works, with verified claims
 
 Topic: `$ARGUMENTS` (a function name, an address, or a question such as
-"how does saving work"). `--lang sl|en` sets the prose language (default `en`).
+"how does saving work"). `--bin <id>` names the binary (default: `current` in
+decompile.yaml). `--lang sl|en` sets the prose language (default:
+`settings.lang_docs`, else the language the user writes in).
 
-The user is learning reverse engineering. The goal is that they understand **how**
-and **why** this part works, not just get names. Every statement in the explanation
-must be backed by a claim that was checked.
+This is the thorough mode: slower than an answer in the chat, and used when the
+result has to be reliable. Every statement in the explanation must be backed by a
+claim that was checked. The user should also understand **how** and **why** this
+part works, not just get names.
 
 ## Step 1 - Scope
 
 - Turn the topic into one precise question, e.g. "How does GAME.EXE write scores.dat?".
 - Find the starting point: the named function, the address, or an anchor for the
-  feature (string, import, resource, control ID). Read the cards in `review/` and
+  feature (string, import, resource, control ID). Read the cards in `review/<id>/` and
   `NOTES.md` first. `## My notes` in a card and NOTES.md are the user's and win;
   `## Analysis` is earlier work of yours and may be re-checked.
 - Pick the subgraph that answers the question: the starting function plus callees
   down to 2 levels and the callers that matter. Skip library/runtime code.
-  Read functions with `outq show <name> [from:to]` and search with
-  `outq grep <regex> [name]`; `outq target` prints the binary's path.
-  `contextpack.sh <binary> <file>.md <name>` gives the same as a file to keep.
+  Read functions with `outq -b <id> show <name> [from:to]`, search with
+  `outq -b <id> grep <regex> [name]`; call chains and calls into other binaries
+  with `outq sql "..."`. `re path <id>` gives the binary's file.
 - If the question is too broad for ~10 functions, say so and propose a narrower one.
 - If another skill in this project covers the whole topic, use this one for a
   single part of it.
@@ -59,7 +62,7 @@ Result is exactly one of:
 - `unverified` - no check was possible; say why.
 
 **Independent review.** When the Agent/Task tool is available, give a fresh subagent
-only the claims table (claim, evidence, binary path, out.json path) and ask it to try
+only the claims table (claim, evidence, binary path, export file from `outq -b <id> path`) and ask it to try
 to refute each claim with its own check. It must not see your explanation. Merge its
 results: any disagreement makes the claim `refuted` or `unverified` until resolved.
 
@@ -72,7 +75,13 @@ before you write results into the table. While it runs you may draft the text,
 but a claim whose only support so far is the pending review is `unverified`, and
 the header counts say so. Do not report to the user before the review is merged.
 
-## Step 4 - Write explain/<topic-slug>.md in exactly this structure
+## Step 4 - Write docs/explain/<NNN>-<topic-slug>.md in exactly this structure
+
+File name: `<NNN>` is the next free 3-digit number in docs/explain/ (order of
+writing). Only when this is made for a task of the plan, as part of the planned
+research, add the task reference after the number: `004-02B-header-checksum.md`
+(phase 02, task B), and link the file from that task's detail file. Outside the
+plan: no reference.
 
 ~~~markdown
 # How <topic> works
@@ -127,19 +136,18 @@ and the claim IDs. There is no need to read `explain_check.py` to find this out.
 ## Step 5 - Check the file
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/explain_check.py explain/<topic-slug>.md
+python3 ${CLAUDE_SKILL_DIR}/explain_check.py docs/explain/<file>.md
 ```
 
 Fix every ERROR and run it again. Do not edit `explain_check.py`.
 
 ## Step 6 - Update the function cards
 
-For every function you read closely, create or update its card `review/<file>.md`
-(format and file naming: see the /re-code skill; if that skill is not installed,
-use: `# <name> @ 0x<address>`, `## Analysis`, `## My notes`). Put into `## Analysis`
+For every function you read closely, create or update its card `review/<id>/<file>.md`
+(format and file naming: CLAUDE.md). Put into `## Analysis`
 what this explanation established about that function: purpose, signature,
 parameters, structure fields and constants, each with [C] for verified claims and
-[H] otherwise, plus `See also: explain/<topic-slug>.md`. Do not paste the whole
+[H] otherwise, plus `See also: docs/explain/<file>.md`. Do not paste the whole
 explanation; the card is the per-function summary. Never touch `## My notes`.
 
 Save tables, listings and helper scripts that the explanation relies on in `work/`
@@ -148,6 +156,5 @@ instead of a temporary directory, and mention them under Evidence.
 ## Step 7 - Answer the user
 
 Give the short answer (section 1) and the counts of verified/refuted/unverified
-claims, mention any correction, and point to the file and the cards you updated. Offer one next question that
-would deepen understanding. If the user wants to learn by doing, offer to turn
-section 2 into questions they answer first.
+claims, mention any correction, and point to the file and the cards you updated.
+Add a line to LOG.md. Name a next question only if the user asks what to look at next.

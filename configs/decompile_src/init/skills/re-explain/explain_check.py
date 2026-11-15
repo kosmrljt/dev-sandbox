@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""explain_check.py - check an explain/<topic>.md written by the /re-explain skill.
+"""explain_check.py - check a docs/explain/<file>.md written by the /re-explain skill.
 
-Usage: explain_check.py explain/<topic>.md
+Usage: explain_check.py docs/explain/<file>.md
        explain_check.py --claims-only <any .md with a claims table>   (used by other skills)
 
 Enforces that the explanation only rests on checked claims:

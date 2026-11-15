@@ -1,29 +1,27 @@
 ---
 name: re-map
-description: For a compiled binary without source code (Ghidra out.json) - build or refresh an interactive architecture map (map/index.html) of the binary being analyzed - modules, external resources, data flows, each marked confirmed or hypothesis with evidence. Use when the user asks for the program's architecture, structure, overview, module map or call graph.
-argument-hint: "[binary] [--refresh]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-map/*), Bash(ls *), Bash(file *)
+description: For a compiled binary without source code - build or refresh an interactive, clickable map (docs/map/index.html) of the binary being analyzed - modules, external resources, data flows, each marked confirmed or hypothesis with evidence. Use when the user asks for a map, a graph, a module map, a call graph or something clickable to explore. A written architecture description is /re-doc.
+argument-hint: "[id] [--refresh]"
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-map/*), Bash(ls *), Bash(file *)
 ---
 
 # /re-map - architecture map of the analyzed binary
 
-Arguments: `$ARGUMENTS` (optional binary path; `--refresh` = keep existing modules,
-only update them from new notes in review/).
+Arguments: `$ARGUMENTS` (optional binary id from decompile.yaml, default `current`;
+`--refresh` = keep existing modules, only update them from new cards in review/<id>/).
 
-The page is built by a fixed script. Your only job is to write `map/modules.json`
+The page is built by a fixed script. Your only job is to write `docs/map/modules.json`
 exactly in the schema below, grounded in evidence. Never write the HTML yourself.
 
 ## Step 1 - Facts
 
-1. Find the binary: the argument if given, otherwise `outq target` (it may be in
-   `target/` or directly in the project directory). If that reports several
-   candidates and none was recorded by exportjson.sh, ask which one.
-   If `out.json` is missing or `outq info` says the binary is newer, run
-   `exportjson.sh <binary> out.json`.
-2. Query `out.json` with `outq`, never by loading it whole: `outq info` (counts,
-   real names or not, entry points), `outq ls` (callers, callees and strings per
-   function), `outq roots` (functions reached only through pointers).
-3. Read every card in `review/`. `## My notes` is the user's and wins over your own
+1. The binary: the id given, otherwise `current`. If `re status` says its export
+   is missing, run `exportjson.sh <id>`.
+2. Query the export with `outq -b <id>`, never by loading it whole: `info` (counts,
+   real names or not, entry points), `ls` (callers, callees and strings per
+   function), `roots` (functions reached only through pointers); groupings and
+   counts with `outq sql "..."`.
+3. Read every card in `review/<id>/`. `## My notes` is the user's and wins over your own
    reading; `## Analysis` is earlier analysis and counts as evidence only where it
    cites its own.
 
@@ -44,10 +42,10 @@ Group the remaining functions into 3 to 12 modules. Use evidence in this order:
 
 Rules:
 - Each function belongs to at most one module. Leave a function out rather than guess.
-- `status: "confirmed"` only if the grouping is backed by real names, by review/ notes,
+- `status: "confirmed"` only if the grouping is backed by real names, by review/ cards,
   or by xrefs you can cite. Everything else is `"hypothesis"`.
 - `evidence` lists concrete items: `"0x00401a30: references \"scores.dat\""`,
-  `"TD32 namespace Unit1::TMainForm"`, `"review/save_scores.md"`. No evidence = no module.
+  `"TD32 namespace Unit1::TMainForm"`, `"review/app/save_scores.md"`. No evidence = no module.
 - `name` says what the module does in 1 to 4 words; `summary` is one sentence.
   Do not take names from a single string.
 
@@ -64,7 +62,7 @@ Rules:
 `next`: the 5 functions whose analysis would most improve the map (unplaced
 functions called by several modules, hypothesis modules with one strong lead).
 
-## Schema of map/modules.json
+## Schema of docs/map/modules.json
 
 ```json
 {
@@ -76,7 +74,7 @@ functions called by several modules, hypothesis modules with one strong lead).
       "summary": "Loads and saves the high-score table.",
       "status": "confirmed",
       "functions": ["FUN_00402210", "FUN_00401a30"],
-      "evidence": ["0x00402210: opens \"scores.dat\" with CreateFileA", "review/save_scores.md"]
+      "evidence": ["0x00402210: opens \"scores.dat\" with CreateFileA", "review/app/save_scores.md"]
     }
   ],
   "resources": [
@@ -97,14 +95,14 @@ functions called by several modules, hypothesis modules with one strong lead).
 ```
 
 `id` values: lowercase letters, digits and `_`, unique across modules and resources.
-Function names must match the `name` field of `out.json` exactly (it is
+Function names must match the `name` field of the export exactly (it is
 namespace-qualified, e.g. `Unit1::TMainForm::FormCreate`).
 
 ## Step 6 - Build and check
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/archmap.py --check     # validates against out.json
-python3 ${CLAUDE_SKILL_DIR}/archmap.py               # writes map/index.html
+python3 ${CLAUDE_SKILL_DIR}/archmap.py --check     # validates against the export of current
+python3 ${CLAUDE_SKILL_DIR}/archmap.py               # writes docs/map/index.html
 ```
 
 Fix every problem `--check` reports and run it again. Do not edit `archmap.py`.
@@ -115,7 +113,11 @@ Fix every problem `--check` reports and run it again. Do not edit `archmap.py`.
 - Functions placed / not placed: quote the counts line that `archmap.py` prints, do
   not count by hand. "Skipped" groups are part of "not placed".
 - The 5 `next` functions, one line each.
-- Tell the user to open `map/index.html` on the host (the project folder is mounted).
+- Tell the user to open `docs/map/index.html` on the host (the project folder is mounted).
+- Add a line to LOG.md.
 
-With `--refresh`: read the existing `map/modules.json`, change only what new review/
-notes or new evidence justify, and list each change (module, old -> new, evidence).
+For another binary than `current`, give the script its files:
+`--export "$(outq -b <id> path)" --review review/<id>`.
+
+With `--refresh`: read the existing `docs/map/modules.json`, change only what new
+review/ cards or new evidence justify, and list each change (module, old -> new, evidence).

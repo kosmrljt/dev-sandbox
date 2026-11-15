@@ -1,8 +1,10 @@
-# ExportJson.py — Ghidra post-script: emit the whole program as structured JSON.
+# ExportJson.py — PyGhidra script: emit the whole program as structured JSON.
 #
-# This is the machine-readable ("API") output: one object per function with its
-# namespace-qualified name ("name"; "short" is the bare name), signature, call graph edges, referenced strings/data (addr + value), and the
-# decompiled pseudocode. analyze.py consumes this to drive selective LLM passes.
+# One object per function: namespace-qualified name ("name"; "short" is the bare
+# name), signature, call-graph edges, referenced strings/data (addr + value) and
+# the decompiled pseudocode. External functions (imports) are included with
+# is_external=true and no pseudocode, so `outq imports` and `outq sql` see them
+# for ELF and PE alike. Read with outq; run through exportjson.sh.
 #
 # Args: <output.json>
 
@@ -42,7 +44,8 @@ def refs(func):
                 val = None
             entry = {"addr": str(to), "type": dt,
                      "value": (str(val) if val is not None else None)}
-            if "string" in dt.lower() or "char" in dt.lower():
+            low = dt.lower()
+            if "string" in low or "char" in low or "unicode" in low:
                 strings.append(entry)
             else:
                 entry["label"] = d.getLabel()
@@ -59,7 +62,8 @@ def qname(f):
 
 
 out = []
-for func in prog.getFunctionManager().getFunctions(True):
+fm = prog.getFunctionManager()
+for func in fm.getFunctions(True):
     strings, datas = refs(func)
     res = decomp.decompileFunction(func, 60, monitor)
     code = res.getDecompiledFunction().getC() if (res and res.decompileCompleted()) else None
@@ -77,7 +81,22 @@ for func in prog.getFunctionManager().getFunctions(True):
         "pseudocode": code,
     })
 
+for func in fm.getExternalFunctions():
+    out.append({
+        "name": qname(func),
+        "short": func.getName(),
+        "address": str(func.getEntryPoint()),
+        "signature": str(func.getSignature()),
+        "is_thunk": False,
+        "is_external": True,
+        "callers": sorted(set(qname(c) for c in func.getCallingFunctions(monitor))),
+        "callees": [],
+        "strings": [],
+        "data_refs": [],
+        "pseudocode": None,
+    })
+
 f = open(outpath, "w")
-json.dump(out, f, indent=2)
+json.dump(out, f, indent=1)
 f.close()
 print("Exported %d functions to %s" % (len(out), outpath))
