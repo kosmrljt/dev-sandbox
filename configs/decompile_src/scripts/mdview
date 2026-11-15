@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""mdview - show a Markdown document (spec, explanation, notes) as a web page with
+its Mermaid diagrams drawn, offline.
+
+Usage:  mdview FILE.md [FILE.md ...]      writes FILE.html next to each file
+        mdview --all [DIR]                every *.md under DIR (default: docs/)
+
+The page: table of contents on the left, Markdown rendered, ```mermaid blocks
+drawn as diagrams, [C]/[H] shown as confirmed/hypothesis, raw HTML in the
+Markdown shown as text (documents quote strings from analyzed binaries).
+Formulas written as $...$ or $$...$$ (GitHub's notation) are kept as text.
+
+The libraries (marked, mermaid) are embedded from a vendor/ folder, so the page
+works without internet: $MDVIEW_VENDOR, else .claude/skills/re-doc/vendor in the
+project, else /opt/ctx/init/skills/re-doc/vendor. Output stays inside the current
+directory (as for exportjson.sh); MDVIEW_ANYWHERE=1 lifts that.
+"""
+
+import html
+import json
+import os
+import sys
+
+VENDORS = [os.environ.get("MDVIEW_VENDOR", ""), ".claude/skills/re-doc/vendor",
+           "/opt/ctx/init/skills/re-doc/vendor"]
+LIBS = [("marked.umd.js", "https://cdn.jsdelivr.net/npm/marked@18.2.0/lib/marked.umd.js"),
+        ("mermaid.min.js", "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js")]
+
+PAGE = r"""<!DOCTYPE html>
+<html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>__TITLE__</title>
+__LIBS__
+<style>
+ body{margin:0;font:15px/1.6 system-ui,sans-serif;color:#222;display:grid;grid-template-columns:240px 1fr}
+ nav{position:sticky;top:0;height:100vh;overflow:auto;border-right:1px solid #ddd;padding:16px;font-size:13px;box-sizing:border-box;background:#fafafa}
+ nav a{display:block;color:#1a5fb4;text-decoration:none;margin:3px 0} nav a.sub{margin-left:12px;color:#555}
+ main{max-width:960px;padding:24px 40px 80px;min-width:0}
+ h1{font-size:24px} h2{font-size:19px;border-bottom:1px solid #eee;padding-bottom:4px;margin-top:36px} h3{font-size:16px;margin-top:24px}
+ table{border-collapse:collapse;margin:8px 0;font-size:13.5px;display:block;overflow-x:auto} th,td{border:1px solid #ddd;padding:4px 8px;vertical-align:top;text-align:left} th{background:#f6f6f6}
+ code{background:#f3f3f3;padding:0 3px;border-radius:3px;font-size:13px} pre{background:#f6f6f6;padding:10px;overflow:auto}
+ .C{background:#dff3e4;border-radius:6px;padding:0 5px;font-size:12px;font-weight:600}
+ .H{background:#fdf0d5;border-radius:6px;padding:0 5px;font-size:12px;font-weight:600}
+ .mermaid{margin:16px 0;text-align:center;overflow-x:auto} .bar{font-size:12px;color:#666}
+ .math{font-family:"Cambria Math","STIX Two Math",serif;background:#f7f7fb;padding:0 3px;border-radius:3px}
+ @media (max-width:760px){body{grid-template-columns:1fr} nav{display:none} main{padding:16px}}
+</style></head><body>
+<nav id="toc"></nav>
+<main id="doc"></main>
+<script>
+const MD = __MD__;
+const r = new marked.Renderer();
+const escH = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+r.code = function(t, lang){ if (typeof t === 'object') { lang = t.lang; t = t.text; }
+  if (lang === 'mermaid') return '<pre class="mermaid">' + escH(t) + '</pre>';
+  return '<pre><code>' + escH(t) + '</code></pre>'; };
+/* Raw HTML in the Markdown is shown as text, never as live markup. */
+r.html = function(t){ if (typeof t === 'object') t = t.text || t.raw || ''; return escH(t); };
+/* $$...$$ and $...$ (GitHub's math notation) are taken out before Markdown sees
+   them (it would eat backslashes) and put back as text, set apart. Code is skipped. */
+const MATH = [];
+const md = MD.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part, k) => k % 2 ? part :
+  part.replace(/\$\$([\s\S]+?)\$\$/g, (m, x) => '@@MATHB' + (MATH.push(x) - 1) + '@@')
+      .replace(/(^|[^\\$\w])\$(?=\S)([^$\n]*?\S)\$(?![\w$])/g, (m, a, x) => a + '@@MATHI' + (MATH.push(x) - 1) + '@@')).join('');
+let h = marked.parse(md, {renderer: r});
+h = h.replace(/@@MATH([BI])(\d+)@@/g, (m, k, n) => k === 'B' ? '<div class="math">' + escH(MATH[+n]) + '</div>'
+                                                         : '<span class="math">' + escH(MATH[+n]) + '</span>');
+h = h.replace(/\[(C|H)\]/g, (m, s) => '<span class="' + s + '">' + (s === 'C' ? 'confirmed' : 'hypothesis') + '</span>');
+const doc = document.getElementById('doc'); doc.innerHTML = h;
+const toc = document.getElementById('toc'); let i = 0;
+doc.querySelectorAll('h1,h2,h3').forEach(e => { e.id = 's' + (i++); const a = document.createElement('a');
+  a.href = '#' + e.id; a.textContent = e.textContent; if (e.tagName === 'H3') a.className = 'sub'; toc.appendChild(a); });
+if (window.mermaid) {
+  mermaid.initialize({startOnLoad:false, securityLevel:'strict', theme:'neutral'});
+  mermaid.run({querySelector:'.mermaid'}).catch(e => doc.insertAdjacentHTML('afterbegin',
+    '<p class="bar">A diagram could not be drawn and is shown as text: ' + escH(e && e.message || e) + '</p>'));
+} else if (doc.querySelector('.mermaid')) {
+  doc.insertAdjacentHTML('afterbegin', '<p class="bar">Diagrams are shown as text: the Mermaid library could not be loaded (no internet access and no embedded copy).</p>');
+}
+</script></body></html>
+"""
+
+
+def vendor_dir():
+    for d in VENDORS:
+        if d and all(os.path.isfile(os.path.join(d, n)) for n, _ in LIBS):
+            return d
+    return None
+
+
+def lib_tags():
+    d = vendor_dir()
+    out = []
+    for name, cdn in LIBS:
+        if d:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                out.append("<script>" + f.read().replace("</script", "<\\/script") + "</script>")
+        else:
+            out.append('<script src="%s"></script>' % cdn)
+    return "\n".join(out), d is not None
+
+
+def inside_cwd(path):
+    here = os.path.realpath(os.getcwd()) + os.sep
+    return os.path.realpath(path).startswith(here) or os.environ.get("MDVIEW_ANYWHERE") == "1"
+
+
+def render(md_path, libs, lang):
+    with open(md_path, encoding="utf-8") as f:
+        text = f.read()
+    first = next((l for l in text.splitlines() if l.strip()), os.path.basename(md_path))
+    title = first.lstrip("# ").strip() or os.path.basename(md_path)
+    out = os.path.splitext(md_path)[0] + ".html"
+    if not inside_cwd(out):
+        sys.exit("mdview: output must be inside the current directory: %s (MDVIEW_ANYWHERE=1 to allow)" % out)
+    page = (PAGE.replace("__TITLE__", html.escape(title))
+                .replace("__LANG__", lang)
+                .replace("__MD__", json.dumps(text).replace("</", "<\\/"))
+                .replace("__LIBS__", libs))
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(page)
+    n = text.count("```mermaid")
+    print("mdview: %s  (%d diagram%s)" % (out, n, "" if n == 1 else "s"))
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return
+    if args[0] == "--all":
+        root = args[1] if len(args) > 1 else "docs"
+        files = sorted(os.path.join(d, n) for d, _, ns in os.walk(root) for n in ns if n.endswith(".md"))
+        if not files:
+            sys.exit("mdview: no .md files under %s" % root)
+    else:
+        files = args
+    for f in files:
+        if not os.path.isfile(f):
+            sys.exit("mdview: not found: %s" % f)
+    libs, offline = lib_tags()
+    lang = os.environ.get("MDVIEW_LANG", "en")
+    for f in files:
+        render(f, libs, lang)
+    print("mdview: libraries %s" % ("embedded, the pages work offline" if offline
+                                    else "linked from a CDN, the pages need internet access"))
+
+
+if __name__ == "__main__":
+    main()

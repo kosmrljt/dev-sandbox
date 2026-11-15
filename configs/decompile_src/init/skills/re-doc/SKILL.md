@@ -2,7 +2,7 @@
 name: re-doc
 description: For a compiled binary without source code - write or update docs/ARCHITECTURE.md, a written, evidence-backed description of how the analyzed program is built and how it runs (context, archetype, components, runtime, data), with Mermaid diagrams. Use when the user wants the architecture as a document (write up, describe the whole program, update the architecture). For a quick question about how the program works answer in the chat; for a clickable map use /re-map.
 argument-hint: "[id] [--refresh] [--review] [--lang sl|en]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-doc/*), Bash(rabin2 *), Bash(readelf *), Bash(file *), Bash(ls *)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-doc/*), Bash(readelf *), Bash(file *), Bash(ls *)
 ---
 
 # /re-doc - how the analyzed program is built (docs/ARCHITECTURE.md)

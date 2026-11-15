@@ -279,12 +279,64 @@ fi
 
 
 # ==============================================================================
+# [8b/9] Tools to check generated pages (walkthroughs, mdview, maps)
+# ==============================================================================
+# - chromium-headless: installed with the image's DNF package list (not here).
+#   Only /usr/lib64/chromium-browser/headless_shell, no window, no services or
+#   autostart; it runs while a command uses it and then exits, e.g.
+#     chromium-headless --screenshot=s.png --window-size=1280,900 page.html
+#   This step only adds the short name when the package is there.
+# - jsdom: loads a page in Node to drive its buttons/sliders in tests.
+#   Installed under /usr/local; NODE_PATH (profile.d) makes require('jsdom') work.
+# Best-effort: a failure only warns.
+log_section "[8b/9] Installing page-check tools (headless Chromium, jsdom, Playwright)"
+
+if [[ -x /usr/lib64/chromium-browser/headless_shell ]]; then
+    ln -sf /usr/lib64/chromium-browser/headless_shell /usr/local/bin/chromium-headless
+    log_ok "chromium-headless found (/usr/local/bin/chromium-headless)"
+else
+    log_warn "chromium-headless not installed: add it to the DNF package list of the image"
+fi
+
+(
+    npm install -g --prefix /usr/local jsdom@24.1.3
+    echo 'export NODE_PATH="/usr/local/lib/node_modules${NODE_PATH:+:$NODE_PATH}"' > /etc/profile.d/node-global.sh
+    log_ok "jsdom 24.1.3 installed (NODE_PATH in /etc/profile.d/node-global.sh)"
+) || log_warn "jsdom not installed"
+
+# - playwright (Python): drives the same headless_shell for clicks and screenshots.
+#   No "playwright install": it would download its own browsers. Use
+#     p.chromium.launch(executable_path="/usr/lib64/chromium-browser/headless_shell")
+#   If a newer system Chromium does not start with this version, raise the pin.
+(
+    pip install "playwright==1.64.1"
+    log_ok "playwright 1.64.1 installed (uses the system headless_shell)"
+) || log_warn "playwright not installed"
+
+# Optional, when needed (not installed by default):
+#   pe-bear icoutils      Windows PE: structure viewer (GUI); extract icons/bitmaps (wrestool)
+#   valgrind rr           memory errors / record-replay when patching a .so
+#   chromium              full browser with a window (VNC desktop); also runs --headless
+#   qemu-user qemu-user-static-aarch64 qemu-user-static-arm   other architectures
+#                         (works rootless in podman; call qemu-aarch64 ./prog explicitly,
+#                          binfmt_misc is a host setting)
+#   dnf install -y <packages>
+
+
+# ==============================================================================
 # [9/9] Symlinks, Desktop Launchers & Cleanup
 # ==============================================================================
 log_section "[9/9] Wiring Scripts & XFCE Desktop Launchers"
 
 # Point Ghidra post-scripts to /opt/ctx/scripts
 ln -sfn "$CTX/scripts" /opt/scripts
+# Links to scripts that this version no longer has (e.g. scripts/analyze.py, now
+# in extras/) would otherwise stay on the PATH and run outdated code.
+#for l in /usr/local/bin/*; do
+#    if [[ -L "$l" && "$(readlink "$l")" == "$CTX/scripts/"* && ! -e "$l" ]]; then
+#        rm -f "$l" && log_info "Removed stale link $l"
+#    fi
+#done
 
 # Ensure executable permissions and symlink all helper scripts into PATH
 chmod -R a+rX "$CTX"
@@ -313,9 +365,12 @@ mk_desktop ImHex   /usr/local/bin/imhex     "Hex editor for reverse engineers"
 mk_desktop jadx    /usr/local/bin/jadx-gui  "Java/APK decompiler"
 log_ok "XFCE desktop launchers created"
 
-# Wipe temporary home and caches if not already handled by caller
+# Wipe the temporary home and what this script left in /tmp. Only its own files:
+# "rm -rf /tmp/*" would also delete other users' and processes' files when the
+# script is run outside a fresh container build.
 log_info "Cleaning up temporary build files in /tmp..."
-rm -rf /tmp/* /tmp/.[!.]* 2>/dev/null || true
+rm -rf "$HOME" /tmp/ghidra.zip /tmp/dotnet-install.sh /tmp/pycdc /tmp/ghidra-mcp-b \
+       /tmp/yq /tmp/jadx.zip /tmp/mermaid.min.js 2>/dev/null || true
 
 printf "\n${C_GREEN}======================================================================${C_RESET}\n"
 printf "${C_GREEN}  [✓] setup-root.sh complete — RE toolchain ready!${C_RESET}\n"

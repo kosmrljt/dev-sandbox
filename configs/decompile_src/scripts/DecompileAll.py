@@ -1,6 +1,6 @@
 # DecompileAll.py — PyGhidra script: decompile every function to C into one file.
 #
-# Run through decompile.sh (pyghidra launcher, project ghidra/ of the project).
+# Run through decompile.sh (pyghidra launcher, project ghidra-project/ of the project).
 # Args: <output.c>
 
 from ghidra.app.decompiler import DecompInterface

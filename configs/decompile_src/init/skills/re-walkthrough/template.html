@@ -3,7 +3,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Walkthrough</title>
 <style>
- :root{--ink:#1d1d1f;--muted:#6b6f76;--line:#d9dce1;--accent:#1a5fb4;--bg:#fff;--soft:#f5f6f8}
+ :root{--ink:#1d1d1f;--muted:#6b6f76;--line:#d9dce1;--accent:#1a5fb4;--bg:#fff;--soft:#f5f6f8;--try:#f2f8f3;--tryline:#9cc9a6}
  *{box-sizing:border-box} html,body{height:100%}
  body{margin:0;font:16px/1.55 system-ui,sans-serif;color:var(--ink);background:var(--bg);display:grid;grid-template-columns:250px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
  header{grid-column:1/3;padding:12px 20px;border-bottom:1px solid var(--line)}
@@ -12,6 +12,7 @@
  nav button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 16px;font:14px system-ui;color:var(--ink);cursor:pointer;border-left:3px solid transparent}
  nav button.on{border-left-color:var(--accent);background:#fff;font-weight:600}
  nav button .n{color:var(--muted);margin-right:6px}
+ nav button .t{font-size:11px;color:var(--muted);margin-left:4px}
  main{overflow:auto;padding:24px 32px}
  main h2{font-size:22px;margin:0 0 10px}
  .text{max-width:760px} .text p{margin:10px 0}
@@ -19,8 +20,22 @@
  .figure svg,.figure img{max-width:100%;height:auto;display:block;margin:auto}
  pre{background:#f1f2f4;padding:12px;border-radius:6px;overflow:auto;font-size:13.5px;max-width:900px}
  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:9px;margin-left:8px;vertical-align:middle}
- .tag.h{background:#fdf0d5} .tag.c{background:#dff3e4} .tag.i{background:#e8e8ee}
+ .tag.c{background:#dff3e4} .tag.h{background:#fdf0d5} .tag.i{background:#e8e8ee} .tag.a{background:#f3e3f7} .tag.k{background:#e3eefb}
  .ref{color:var(--muted);font-size:13px;margin-top:14px}
+ .box{margin:18px 0;padding:14px 16px;border-radius:8px;max-width:900px}
+ .box h3{margin:0 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:.04em}
+ .try{background:var(--try);border:1px solid var(--tryline)} .try h3{color:#2b6b3a}
+ .check{background:#fbf8ef;border:1px solid #e3d6a8} .check h3{color:#7a5d0a}
+ .check .a{margin-top:8px;padding-top:8px;border-top:1px dashed #e3d6a8}
+ .w-row{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;margin:6px 0}
+ .w-grid{display:inline-grid;gap:1px;background:var(--line);border:1px solid var(--line);user-select:none}
+ .w-grid div{width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;font-size:11px}
+ .w-grid.edit div{cursor:pointer}
+ .w-cap{font-size:13px;color:var(--muted);margin:4px 0}
+ .w-ctl{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:14px}
+ .w-ctl input[type=range]{width:200px}
+ .w-btn{font:14px system-ui;padding:4px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+ .w-out{margin:6px 0}
  footer{grid-column:1/3;border-top:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:12px}
  footer button{font:15px system-ui;padding:6px 14px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
  footer button:disabled{opacity:.4;cursor:default}
@@ -30,7 +45,7 @@
 </style></head><body>
 <header><h1 id="title"></h1><p id="subtitle"></p></header>
 <nav id="nav"></nav>
-<main><h2 id="h"></h2><div class="text" id="text"></div><div id="fig"></div><div id="code"></div><div class="ref" id="ref"></div></main>
+<main><h2 id="h"></h2><div class="text" id="text"></div><div id="fig"></div><div id="code"></div><div id="try"></div><div id="check"></div><div class="ref" id="ref"></div></main>
 <footer><button id="prev">&larr; Back</button><button id="next">Next &rarr;</button><div id="bar"><i></i></div><span id="pos"></span></footer>
 <script>
 /* Fill in TITLE, SUBTITLE and STEPS. Each step:
@@ -38,9 +53,27 @@
      text    HTML: a few short paragraphs in plain words (required)
      figure  optional HTML: an inline <svg>, a small table, or <img src="data:...">
      code    optional string: a few lines of code or data, shown as-is
-     status  optional: 'confirmed' | 'hypothesis' | 'illustration'
+     widget  optional function (el, W) => {...}: a "Try it" box. Build controls with
+             the helpers in W (below); recompute the result from the input on every
+             change, with the same algorithm the page explains. Keep state you want to
+             survive Back/Next in variables outside the function.
+     check   optional {q: 'HTML question', a: 'HTML answer'} (or a list of them):
+             "Check yourself", the answer stays hidden until clicked
+     status  optional: 'confirmed' | 'hypothesis' | 'illustration'   (about the analyzed code)
+                       'alternative'  another way to do it, NOT what the analyzed code does
+                       'concept'      general explanation, not about specific code
      ref     optional small print, e.g. where in the binary this happens
-   Keep one concrete example running through all steps. No external files. */
+   Keep one concrete example running through all steps. No external files.
+
+   Helpers W (each returns an object with set()/get() where it makes sense):
+     W.grid(el, {cells, cell: 24, edit: false, colors: {0:'#fff', 1:'#333'},
+                 labels: false, caption: '', onChange: cells => {}})
+         2-D array of small integers shown as squares; edit: click cycles 0/1
+     W.slider(el, {label, min, max, step: 1, value, onInput: v => {}})
+     W.button(el, label, onClick)
+     W.text(el, '')            a <pre> for computed text output
+     W.row(el)                 a horizontal row to put several of the above side by side
+     W.copy(cells)             deep copy of a 2-D array                                  */
 const TITLE = 'How a value is looked up';
 const SUBTITLE = 'Example walkthrough - replace with your topic';
 const STEPS = [
@@ -51,15 +84,61 @@ const STEPS = [
   {title: 'Compare one record',
    text: '<p>The name at the start of the record is compared with the name we are looking for.</p>',
    code: 'record 1 name: "ANA"\nsearched name: "ANA"   -> equal',
+   widget: (el, W) => {
+     const out = W.text(el, '');
+     const names = ['BOR', 'ANA', 'EVA'];
+     W.slider(el, {label: 'record to compare', min: 0, max: 2, value: 1,
+       onInput: v => out.set('record ' + v + ' name: "' + names[v] + '"\nsearched name: "ANA"   -> ' + (names[v] === 'ANA' ? 'equal' : 'different'))});
+   },
+   check: {q: 'What happens if two records have the same name?', a: 'The first one is found; the loop stops at the first match.'},
    status: 'confirmed', ref: 'small print: where this happens'},
   {title: 'Result',
    text: '<p>The first matching record is returned. If none matches, the result is "not found".</p>',
    status: 'hypothesis'}
 ];
 
+/* ---- widget helpers ---------------------------------------------------- */
+const W = {
+  copy: a => a.map(r => r.slice()),
+  row(el) { const d = document.createElement('div'); d.className = 'w-row'; el.appendChild(d); return d; },
+  grid(el, o) {
+    o = Object.assign({cell: 24, edit: false, colors: {0: '#fff', 1: '#333'}, labels: false, caption: ''}, o);
+    const wrap = document.createElement('div'); el.appendChild(wrap);
+    const g = document.createElement('div'); g.className = 'w-grid' + (o.edit ? ' edit' : '');
+    g.style.setProperty('--cell', o.cell + 'px'); wrap.appendChild(g);
+    const cap = document.createElement('div'); cap.className = 'w-cap'; wrap.appendChild(cap);
+    let cells = W.copy(o.cells);
+    const draw = () => {
+      g.innerHTML = ''; g.style.gridTemplateColumns = 'repeat(' + (cells[0] || []).length + ', var(--cell))';
+      cells.forEach((r, y) => r.forEach((v, x) => {
+        const c = document.createElement('div'); c.style.background = o.colors[v] || '#f0f';
+        if (o.labels) { c.textContent = v; c.style.color = (v && o.colors[v] === '#333') ? '#fff' : '#555'; }
+        if (o.edit) c.onclick = () => { cells[y][x] = cells[y][x] ? 0 : 1; draw(); if (o.onChange) o.onChange(W.copy(cells)); };
+        g.appendChild(c); }));
+      cap.textContent = o.caption || '';
+    };
+    draw();
+    return {set(c, caption) { cells = W.copy(c); if (caption !== undefined) o.caption = caption; draw(); }, get: () => W.copy(cells)};
+  },
+  slider(el, o) {
+    const d = document.createElement('label'); d.className = 'w-ctl';
+    const s = document.createElement('input'); s.type = 'range'; s.min = o.min; s.max = o.max; s.step = o.step || 1; s.value = o.value;
+    const v = document.createElement('b'); v.textContent = o.value;
+    d.append(o.label || '', s, v); el.appendChild(d);
+    s.oninput = () => { v.textContent = s.value; if (o.onInput) o.onInput(Number(s.value)); };
+    if (o.onInput) o.onInput(Number(o.value));
+    return {get: () => Number(s.value), set: x => { s.value = x; s.oninput(); }};
+  },
+  button(el, label, fn) { const b = document.createElement('button'); b.className = 'w-btn'; b.textContent = label; b.onclick = fn; el.appendChild(b); return b; },
+  text(el, t) { const p = document.createElement('pre'); p.className = 'w-out'; p.textContent = t; el.appendChild(p); return {set: x => { p.textContent = x; }}; }
+};
+
 const $ = id => document.getElementById(id);
-const LABEL = {confirmed: ['c', 'confirmed'], hypothesis: ['h', 'hypothesis'], illustration: ['i', 'illustration']};
+const LABEL = {confirmed: ['c', 'confirmed'], hypothesis: ['h', 'hypothesis'], illustration: ['i', 'illustration'],
+               alternative: ['a', 'alternative'], concept: ['k', 'concept']};
 let cur = 0;
+function box(cls, title) { const b = document.createElement('div'); b.className = 'box ' + cls;
+  const h = document.createElement('h3'); h.textContent = title; b.appendChild(h); return b; }
 function show(i) {
   cur = Math.max(0, Math.min(STEPS.length - 1, i)); const s = STEPS[cur];
   const t = LABEL[s.status]; $('h').innerHTML = ''; $('h').textContent = (cur + 1) + '. ' + s.title;
@@ -67,6 +146,15 @@ function show(i) {
   $('text').innerHTML = s.text || '';
   $('fig').innerHTML = s.figure ? '<div class="figure">' + s.figure + '</div>' : '';
   $('code').innerHTML = ''; if (s.code) { const p = document.createElement('pre'); p.textContent = s.code; $('code').appendChild(p); }
+  $('try').innerHTML = '';
+  if (s.widget) { const b = box('try', 'Try it'); $('try').appendChild(b);
+    try { s.widget(b, W); } catch (e) { const p = document.createElement('pre'); p.textContent = 'widget error: ' + e; b.appendChild(p); } }
+  $('check').innerHTML = '';
+  if (s.check) { const b = box('check', 'Check yourself'); $('check').appendChild(b);
+    [].concat(s.check).forEach(c => { const q = document.createElement('div'); q.innerHTML = c.q; b.appendChild(q);
+      const a = document.createElement('div'); a.className = 'a'; a.innerHTML = c.a; a.hidden = true;
+      const btn = W.button(b, 'Show answer', () => { a.hidden = !a.hidden; btn.textContent = a.hidden ? 'Show answer' : 'Hide answer'; });
+      b.appendChild(a); }); }
   $('ref').textContent = s.ref || '';
   document.querySelectorAll('nav button').forEach((b, k) => b.classList.toggle('on', k === cur));
   $('prev').disabled = cur === 0; $('next').disabled = cur === STEPS.length - 1;
@@ -77,8 +165,11 @@ function show(i) {
 }
 document.title = TITLE; $('title').textContent = TITLE; $('subtitle').textContent = SUBTITLE;
 STEPS.forEach((s, k) => { const b = document.createElement('button'); const n = document.createElement('span'); n.className = 'n'; n.textContent = (k + 1) + '.';
-  b.appendChild(n); b.appendChild(document.createTextNode(s.title)); b.onclick = () => show(k); $('nav').appendChild(b); });
+  b.appendChild(n); b.appendChild(document.createTextNode(s.title));
+  if (s.widget) { const t = document.createElement('span'); t.className = 't'; t.textContent = '▸ try'; b.appendChild(t); }
+  b.onclick = () => show(k); $('nav').appendChild(b); });
 $('prev').onclick = () => show(cur - 1); $('next').onclick = () => show(cur + 1);
-document.addEventListener('keydown', e => { if (e.key === 'ArrowRight' || e.key === 'PageDown') show(cur + 1); if (e.key === 'ArrowLeft' || e.key === 'PageUp') show(cur - 1); });
+document.addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') show(cur + 1); if (e.key === 'ArrowLeft' || e.key === 'PageUp') show(cur - 1); });
 show((parseInt(location.hash.slice(1), 10) || 1) - 1);
 </script></body></html>

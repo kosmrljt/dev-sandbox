@@ -45,7 +45,7 @@ Research data (what the research works on)
 
     decompile.yaml     binaries, which one is current, settings
     out.<id>.json      export of one binary; read with outq
-    ghidra/            the Ghidra project ghidra/project.gpr; one program per binary
+    ghidra-project/    the Ghidra project ghidra-project/project.gpr; one program per binary
     src/<id>/          recovered source (.NET, Python only)
     work/              scripts, extracted tables, captured runs
     tools/queries.sql  saved queries (only when needed)
@@ -168,7 +168,7 @@ function, addr, value):
     outq sql "SELECT * FROM 'work/runs.csv'"
 
 Useful queries Claude saves in tools/queries.sql as macros with an example.
-The Ghidra scripts run through ghidra-run in ghidra/project.gpr, so a binary
+The Ghidra scripts run through ghidra-run in ghidra-project/project.gpr, so a binary
 is imported and analyzed only once.
 
 Optional: python3 /opt/ctx/extras/analyze.py (batch analysis through the
@@ -190,8 +190,14 @@ result; Claude uses one when you ask for it. Type / to see them.
     /re-spec           what a feature does, without        docs/spec/<feature>.md
                        references to the code
     /re-plan           the research plan                   plan/NN-<phase>/
+    /re-code           one function as readable C, as a    review/<id>/<name>.md
+                       card (--depth N: its callees too)
+    /re-port           a feature as Python, compared with  reimpl/<feature>.py
+                       the original (run, ctypes, emulation)
 
-Open the .html files on your own machine; they work offline. [C] = confirmed
+Open the .html files on your own machine; they work offline. Any Markdown
+document with diagrams (a spec, an explanation, your notes) becomes a page with
+the diagrams drawn: mdview docs/spec/x.md (or mdview --all). [C] = confirmed
 by evidence, [H] = hypothesis. Refuted claims stay with a correction. The
 language comes from decompile.yaml; --lang overrides it once. Your own skills:
 ~/.config/decompile/skills/<name>/SKILL.md (copied by decompile-init).
@@ -207,19 +213,26 @@ missed."
 VNC: 127.0.0.1:5901, password $SANDBOX_VNC_PASS (default "sandbox"); from
 another machine ssh -L 5901:127.0.0.1:5901 -p 2232 dev@host.
 
-    decompile-init --mcp               # .mcp.json, Ghidra read permissions
-    re set settings.ghidra_live true
+    re init <binary> --live            # ghidra_live = true, .mcp.json, MCP permissions
+                                       # (an existing project: the same, or
+                                       #  decompile-init --mcp-only; re set settings.ghidra_live true)
     ghidra-mcp-up                      # starts Ghidra, waits for the plugin
     claude                             # /mcp shows "ghidra"
 
-The first time: in Ghidra open ghidra/project.gpr, open the program of the
+The export runs headless and cannot open the project while the window holds it,
+so re init comes first, the Ghidra window second. With DECOMPILE_GHIDRA_LIVE=1
+in your environment every new project starts live.
+
+The first time: in Ghidra open ghidra-project/project.gpr, open the program of the
 current binary (named by its id), enable the GhidraMCP plugin (File >
 Configure). Ghidra then reopens it by itself.
 
-Claude reads freely (get_*, list_*, find_*, search_*, decompile_*, read_*).
-It renames, retypes or creates structures only when you ask or agree, one
-task at a time, and says first what it will change; each change asks for
-approval. Names given in Ghidra are hypotheses, not evidence.
+Claude reads freely (get_*, list_*, find_*, search_*, decompile_*, read_*,
+disassemble_*). It renames, retypes or creates structures only when you ask or
+agree, one task at a time: first it shows the list (old -> new, evidence) and
+applies it after your yes. Renames, retypes and function tags then run without a
+prompt; functions it changed carry the tag "claude". Saving, deleting, memory
+blocks and scripts always ask. Names given in Ghidra are hypotheses, not evidence.
 
 The export does not see changes made in Ghidra, and the scripts cannot open
 the project while the window holds it; they stop and print the steps. With
@@ -283,13 +296,19 @@ The full rules are in CLAUDE.md, loaded in every session.
 --------------------------------------------------
 
     decompile-init --migrate     # new CLAUDE.md, skills, kb, permissions;
-                                 # results move under docs/
+                                 # results move under docs/;
+                                 # ghidra/ -> ghidra-project/ (Ghidra window closed)
     re init /path/to/program     # out.json -> out.<id>.json, cards -> review/<id>/
 
 Replaced files are kept in .claude/old/. NOTES.md stays as it is (the new
-template is /opt/ctx/init/NOTES.md); Claude's log now goes to LOG.md. The old
-<program>_ghidra project is not used; the binary is imported into ghidra/
-once.
+template is /opt/ctx/init/NOTES.md); Claude's log now goes to LOG.md. In the
+Ghidra window, open ghidra-project/project.gpr from now on. An even older
+<program>_ghidra project next to the binary is not used; the binary is
+imported into ghidra-project/ once.
+
+Installing a new version of /opt/ctx by hand: delete the old one first
+(rm -rf /opt/ctx, then copy), so that files a version removed do not stay
+behind. A rebuild of the image does this by itself.
 
 
 11  If something goes wrong

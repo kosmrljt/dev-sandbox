@@ -30,9 +30,11 @@ def default_exports():
         files = []
     return files or ["out.json"]
 
-DECOMP = re.compile(r"\b(?:thunk_)?(?:FUN|DAT|LAB|SUB|PTR)_[0-9a-fA-F]{4,}\b"
-                    r"|\b[a-z]{1,3}Var\d+\b|\bparam_\d+\b|\blocal_[0-9a-fA-F]+\b"
-                    r"|\bundefined[1248]\b|\bin_[A-Z]{2}_OFFSET\b|\bCONCAT\d+\b")
+DECOMP = re.compile(r"\b(?:thunk_)?(?:FUN|DAT|LAB|SUB|PTR|BYTE|WORD|DWORD|QWORD|switchD)_[0-9a-fA-F]{4,}\w*"
+                    r"|(?<![\w])[a-z]{0,3}_?Var\d+\b|\bparam_\d+\b|\blocal_(?:res)?[0-9a-fA-F]+\b"
+                    r"|\b(?:extraout|unaff)_[A-Za-z0-9_]+\b|\bin_(?:stack_[0-9a-fA-F]+|[A-Z][A-Z0-9_]*)\b"
+                    r"|\b[a-z]{1,3}Stack_[0-9a-fA-F]+\b|\bs_\w+_[0-9a-fA-F]{8}\b"
+                    r"|\bundefined[1248]\b|\bCONCAT\d+\b|\bSUB\d+\b|\bZEXT\d+\b|\bSEXT\d+\b")
 HEX = re.compile(r"\b0x([0-9a-fA-F]{4,16})\b")
 # names too ordinary to count as a leak when they appear as a normal word
 COMMON = {"main", "entry", "start", "init", "open", "close", "read", "write", "send", "recv", "copy",

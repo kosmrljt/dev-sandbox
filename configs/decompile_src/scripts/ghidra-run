@@ -3,7 +3,7 @@
 
 Usage:  ghidra-run [--skip-analysis] <id|binary> <script.py> [script args ...]
 
-All binaries share the project's Ghidra project, ghidra/project.gpr (the same
+All binaries share the project's Ghidra project, ghidra-project/project.gpr (the same
 file you open in the Ghidra window). Inside it, each program is named after
 its id from decompile.yaml, so two binaries with the same file name stay
 separate. A program that is already there is not imported or analyzed again,
@@ -58,12 +58,12 @@ def main():
             % (getattr(pyghidra, "__version__", "?"), ", ".join(missing)))
 
     os.environ.setdefault("GHIDRA_INSTALL_DIR", os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
-    os.makedirs("ghidra", exist_ok=True)
-    print("== %s: %s in ghidra/project.gpr (program '%s')%s =="
+    os.makedirs("ghidra-project", exist_ok=True)
+    print("== %s: %s in ghidra-project/project.gpr (program '%s')%s =="
           % (os.path.basename(script), binary, bid, ", no analysis" if skip else ""))
     pyghidra.run_script(
         binary, script,
-        project_location=os.path.abspath("ghidra"),
+        project_location=os.path.abspath("ghidra-project"),
         project_name="project",
         script_args=script_args,
         analyze=not skip,

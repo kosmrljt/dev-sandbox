@@ -2,7 +2,7 @@
 name: re-spec
 description: For a compiled binary without source code - write a detailed description of what one feature does, without any reference to the code (no addresses, no names from the decompilation, no decompiled code), so that the user can build their own implementation from it. Use when the user asks for a specification, a functional description, or a description without references to the code or the binary - also as a follow-up to an explanation or walkthrough.
 argument-hint: "<feature> [--lang sl|en]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(outq *), Bash(re status), Bash(re get *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-spec/*)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(outq *), Bash(re status), Bash(re get *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-spec/*), Bash(mdview *)
 ---
 
 # /re-spec - what a feature does, described without the code
@@ -24,7 +24,10 @@ Do not fill gaps with guesses; say what is unknown.
 ## How to write it
 
 - Describe behaviour: what must happen for which input. Use rules, formulas,
-  tables, step lists and diagrams in neutral notation. Do not copy or lightly
+  tables, step lists and diagrams in neutral notation. Diagrams as ```mermaid
+  blocks (flowchart for steps and decisions, sequenceDiagram for exchanges,
+  stateDiagram-v2 for states); formulas as $...$ inline and $$...$$ on their own
+  line (GitHub's notation; it renders there). Do not copy or lightly
   rewrite decompiled code, and do not mirror its variables or loop order where
   the behaviour does not require it.
 - Use your own clear names for fields, states and operations. No name from the
@@ -59,9 +62,17 @@ python3 ${CLAUDE_SKILL_DIR}/spec_check.py docs/spec/<feature-slug>.md
 ```
 
 It only looks for things that point into the binary (addresses and names found
-in the exports of all binaries, decompiler names). Fix what it reports.
+in the exports of all binaries, decompiler names). Fix what it reports. Then
+
+```bash
+mdview docs/spec/<feature-slug>.md
+```
+
+writes `docs/spec/<feature-slug>.html`: the same text with the diagrams drawn,
+for the user to read (offline).
 
 ## Report
 
-One or two sentences: what the description covers and what is still unverified.
+One or two sentences: what the description covers and what is still unverified,
+and the .html to open.
 Add a line to LOG.md.

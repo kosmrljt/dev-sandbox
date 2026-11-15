@@ -9,6 +9,8 @@
     outq roots                   functions nobody calls (entry points, callbacks, handlers)
     outq show NAME [A:B]         one function: signature, callers, callees, strings,
                                  pseudocode (optionally only lines A..B)
+    outq asm NAME [A:B]          one function's disassembly with Ghidra's names (from the
+                                 sidecar out.<id>.asm.json; first 150 lines unless A:B)
     outq grep REGEX [NAME]       search pseudocode; prints  function:line: text
     outq strings [REGEX]         referenced strings and the functions that use them
     outq imports [REGEX]         external functions and who calls them
@@ -18,7 +20,8 @@
                                                is_thunk, is_external, callers, callees,
                                                strings, data_refs, pseudocode)
                                    calls      (bin, src, dst)
-                                   strings    (bin, function, addr, value)
+                                   strings    (bin, function, addr, value, type)
+                                   data_refs  (bin, function, addr, type, value, label)
                                  Macros from tools/queries.sql are loaded first.
     outq selftest                run the examples in tools/queries.sql
 
@@ -44,7 +47,9 @@ Format of out.json: a JSON LIST with one object per function:
     signature   prototype as Ghidra shows it
     is_thunk, is_external
     callers, callees   lists of qualified names
-    strings     [{addr, type, value}]   strings the function references
+    strings     [{addr, type, value}]   strings the function references; type
+                                        "cstring?" = bytes Ghidra left undefined that
+                                        read as a NUL-terminated string (guessed)
     data_refs   [{addr, type, value}]   other data it references
     pseudocode  decompiled C (may be empty)
 """
@@ -81,6 +86,18 @@ def load(path):
     for f in d:
         f.setdefault("short", f.get("name", "").split("::")[-1])
     return d
+
+
+def project_root():
+    """The nearest folder upwards (from here) that holds decompile.yaml, or None."""
+    d = os.getcwd()
+    while True:
+        if os.path.isfile(os.path.join(d, CFG)):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
 
 
 def project():
@@ -272,7 +289,12 @@ def cmd_show(funcs, a):
         m = re.fullmatch(r"(\d*):(\d*)", a["args"][1])
         if not m:
             die("line range must look like 120:180")
-        rng = (int(m.group(1) or 1), int(m.group(2) or len(code)))
+        rng = (max(1, int(m.group(1) or 1)), int(m.group(2) or len(code)))
+        if rng[0] > rng[1]:
+            die("empty line range %s" % a["args"][1])
+        # Even with a range, say which function this is (the name may be a partial match).
+        print("%s @ 0x%s  lines %d-%d of %d"
+              % (f["name"], f.get("address"), rng[0], min(rng[1], len(code)), len(code)))
     if rng is None:
         print("name       %s" % f["name"])
         print("address    0x%s" % f.get("address"))
@@ -287,10 +309,51 @@ def cmd_show(funcs, a):
         cap = a["show"]
         print("pseudocode %d lines%s" % (len(code), "" if not cap or len(code) <= cap else
                                           "  (first %d shown; more:  outq show %s %d:%d  or  outq grep REGEX %s)"
-                                          % (cap, f["short"], cap + 1, min(len(code), 2 * cap), f["short"])))
+                                          % (cap, unique_key(f), cap + 1, min(len(code), 2 * cap), unique_key(f))))
         rng = (1, len(code) if not cap else min(len(code), cap))
     for i in range(rng[0], min(rng[1], len(code)) + 1):
         print("%5d  %s" % (i, code[i - 1]))
+
+
+def unique_key(f):
+    """A key that find() resolves to exactly this function: the short name when no
+    other function has it, otherwise the address (short names repeat across classes)."""
+    return f["short"] if SHORT_COUNT.get(f["short"], 0) == 1 else "0x" + f.get("address", "")
+
+
+SHORT_COUNT = {}
+
+
+def asm_file(a):
+    base = a["file"][:-5] if a["file"].endswith(".json") else a["file"]
+    return base + ".asm.json"
+
+
+def cmd_asm(funcs, a):
+    if not a["args"]:
+        die("asm needs a function name or address")
+    f = find(funcs, a["args"][0])
+    path = asm_file(a)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = json.load(fh).get(f["name"] + "@" + f.get("address", ""))
+    except FileNotFoundError:
+        die("%s not found: this export was made before disassembly was exported. "
+            "Run exportjson.sh again (or read the code with objdump -d)." % path)
+    if lines is None:
+        die("no disassembly for %s in %s (external function?)" % (f["name"], path))
+    if len(a["args"]) > 1:
+        m = re.fullmatch(r"(\d*):(\d*)", a["args"][1])
+        if not m:
+            die("line range must look like 120:180")
+        lo, hi = max(1, int(m.group(1) or 1)), int(m.group(2) or len(lines))
+    else:
+        lo, hi = 1, (min(len(lines), a["show"]) if a["show"] else len(lines))
+    print("%s @ 0x%s  instructions %d-%d of %d%s"
+          % (f["name"], f.get("address"), lo, min(hi, len(lines)), len(lines),
+             "" if hi >= len(lines) else "  (more: outq asm %s %d:%d)" % (unique_key(f), hi + 1, min(len(lines), 2 * hi))))
+    for i in range(lo, min(hi, len(lines)) + 1):
+        print("%5d  %s" % (i, lines[i - 1]))
 
 
 def cmd_grep(funcs, a):
@@ -385,8 +448,10 @@ def sql_connect(a):
         % (b.replace("'", "''"), f.replace("'", "''")) for b, f in pairs)
     con.execute("CREATE TABLE functions AS " + sel)
     con.execute("CREATE VIEW calls AS SELECT bin, name AS src, unnest(callees) AS dst FROM functions")
-    con.execute("CREATE VIEW strings AS SELECT bin, name AS function, s.addr AS addr, s.value AS value "
-                "FROM (SELECT bin, name, unnest(strings) AS s FROM functions)")
+    con.execute("CREATE VIEW strings AS SELECT bin, name AS function, s.addr AS addr, s.value AS value, "
+                "s.type AS type FROM (SELECT bin, name, unnest(strings) AS s FROM functions)")
+    con.execute("CREATE VIEW data_refs AS SELECT bin, name AS function, d.addr AS addr, d.type AS type, "
+                "d.value AS value, d.label AS label FROM (SELECT bin, name, unnest(data_refs) AS d FROM functions)")
     # From here on: no files except reading and writing under work/. outq runs
     # without asking, so a query must not be able to change NOTES.md,
     # decompile.yaml or anything else. Cannot be switched back in this connection.
@@ -463,7 +528,7 @@ def cmd_selftest(funcs, a):
     sys.exit(1 if bad else 0)
 
 
-CMDS = {"info": cmd_info, "target": cmd_target, "ls": cmd_ls, "roots": cmd_roots, "show": cmd_show,
+CMDS = {"info": cmd_info, "target": cmd_target, "ls": cmd_ls, "roots": cmd_roots, "show": cmd_show, "asm": cmd_asm,
         "grep": cmd_grep, "strings": cmd_strings, "imports": cmd_imports,
         "path": cmd_path, "id": cmd_id, "sql": cmd_sql, "selftest": cmd_selftest}
 NO_LOAD = {"path", "id", "sql", "selftest"}
@@ -500,8 +565,16 @@ def main():
         return
     if cmd not in CMDS:
         die("unknown command '%s' (commands: %s)" % (cmd, ", ".join(CMDS)))
+    # Run from a subfolder too: work from the folder that holds decompile.yaml.
+    if a["file"]:
+        a["file"] = os.path.relpath(os.path.abspath(a["file"]), project_root() or os.getcwd())
+    root = project_root()
+    if root:
+        os.chdir(root)
     select(a)
     funcs = [] if cmd in NO_LOAD or (cmd == "target" and not os.path.isfile(a["file"])) else load(a["file"])
+    for f in funcs:
+        SHORT_COUNT[f["short"]] = SHORT_COUNT.get(f["short"], 0) + 1
     try:
         CMDS[cmd](funcs, a)
     except re.error as e:
