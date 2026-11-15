@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# decompile-init - scaffold a reverse-engineering project in the current dir.
+# Usage:
+#   decompile-init          CLAUDE.md, NOTES.md, review/, work/, .claude/ (settings, skills, kb)
+#   decompile-init --mcp    also .mcp.json + Ghidra read permissions (live MCP loop)
+#   decompile-init --migrate  bring a project made with an older version up to date:
+#                           CLAUDE.md, skills and kb replaced (old ones kept in .claude/old/),
+#                           new permissions added, results moved under docs/
+#   decompile-init <dir>    target a specific directory instead of "."
+#   decompile-init --help
+#
+# Next step after it: re init <binary>.
+# Templates come from /opt/ctx/init; the user guide is /opt/ctx/docs/GUIDE.md.
+
+set -euo pipefail
+
+INIT="${DECOMPILE_INIT:-/opt/ctx/init}"
+GUIDE="${DECOMPILE_DOC:-/opt/ctx/docs}/GUIDE.md"
+WANT_MCP=0
+MIGRATE=0
+TARGET="."
+
+for a in "$@"; do
+    case "$a" in
+        --mcp)     WANT_MCP=1 ;;
+        --migrate) MIGRATE=1 ;;
+        -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+        -*)        echo "unknown option: $a" >&2; exit 2 ;;
+        *)         TARGET="$a" ;;
+    esac
+done
+
+if [[ ! -d "$INIT" ]]; then
+    echo "init dir not found: $INIT (rebuild the profile)" >&2
+    exit 1
+fi
+
+mkdir -p "$TARGET/.claude"
+
+# put <template> <relative destination>: copy unless the file is already there.
+# A file you already have is never overwritten.
+put() {
+    if [[ -e "$TARGET/$2" ]]; then
+        echo "= $2 (exists, kept)"
+    else
+        cp "$1" "$TARGET/$2" && echo "+ $2"
+    fi
+}
+
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OLD="$TARGET/.claude/old"
+# keep_old <relative path>: move it into .claude/old/ (with a time stamp)
+keep_old() {
+    mkdir -p "$OLD"
+    mv "$TARGET/$1" "$OLD/$(basename "$1").$STAMP" && echo "> $1 kept as .claude/old/$(basename "$1").$STAMP"
+}
+
+if [[ "$MIGRATE" == 1 && -e "$TARGET/CLAUDE.md" ]] && ! cmp -s "$INIT/CLAUDE.md" "$TARGET/CLAUDE.md"; then
+    keep_old CLAUDE.md
+fi
+put "$INIT/CLAUDE.md" CLAUDE.md
+
+# Permissions: read-only RE tools (file, rabin2, readelf, objdump, strings and
+# the export scripts) run without a prompt. Running the analyzed program, gdb,
+# strace/ltrace and anything that changes files still asks.
+put "$INIT/claude-settings.json" .claude/settings.json
+
+# add_perms <template.json> <what>: add the template's allow/ask entries to
+# settings.json. Additive only: what you already have stays untouched.
+add_perms() {
+    python3 - "$TARGET/.claude/settings.json" "$1" "$2" <<'PY' || echo "! .claude/settings.json: could not add permissions (see above)"
+import json, sys
+dst, src, what = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    cur = json.load(open(dst, encoding="utf-8"))
+except ValueError as e:
+    sys.exit("  %s is not valid JSON (%s); left unchanged" % (dst, e))
+tpl = json.load(open(src, encoding="utf-8"))["permissions"]
+n = 0
+for kind in ("allow", "ask"):
+    have = cur.setdefault("permissions", {}).setdefault(kind, [])
+    new = [a for a in tpl.get(kind, []) if a not in have]
+    have.extend(new)
+    n += len(new)
+if n:
+    with open(dst, "w", encoding="utf-8") as f:
+        json.dump(cur, f, indent=2)
+        f.write("\n")
+    print("+ .claude/settings.json: added %d %s" % (n, what))
+else:
+    print("= .claude/settings.json (%s already there)" % what)
+PY
+}
+[[ "$MIGRATE" == 1 ]] && add_perms "$INIT/claude-settings.json" "permissions of this version"
+
+if [[ "$WANT_MCP" == 1 ]]; then
+    put "$INIT/.mcp.json" .mcp.json
+    add_perms "$INIT/claude-settings-mcp.json" "Ghidra MCP read permissions"
+fi
+
+mkdir -p "$TARGET/review" "$TARGET/work"
+put "$INIT/NOTES.md" NOTES.md
+
+# Knowledge per binary type (.claude/kb/), read by Claude when the type needs it.
+if [[ -d "$INIT/kb" ]]; then
+    mkdir -p "$TARGET/.claude/kb"
+    for k in "$INIT"/kb/*; do
+        n="$(basename "$k")"
+        if [[ "$MIGRATE" == 1 && -e "$TARGET/.claude/kb/$n" ]] && ! cmp -s "$k" "$TARGET/.claude/kb/$n"; then
+            keep_old ".claude/kb/$n"
+        fi
+        put "$k" ".claude/kb/$n"
+    done
+fi
+
+# Project skills (/re-doc, /re-explain, ...): copy each skill folder that is not
+# there yet. Two sources: the ones shipped with the image, and your own in
+# $DECOMPILE_SKILLS_EXTRA (default ~/.config/decompile/skills, a persistent volume).
+EXTRA="${DECOMPILE_SKILLS_EXTRA:-$HOME/.config/decompile/skills}"
+for src in "$INIT/skills" "$EXTRA"; do
+    [[ -d "$src" ]] || continue
+    mkdir -p "$TARGET/.claude/skills"
+    for d in "$src"/*/; do
+        [[ -d "$d" ]] || continue
+        n="$(basename "$d")"
+        if [[ "$MIGRATE" == 1 && "$src" == "$INIT/skills" && -e "$TARGET/.claude/skills/$n" ]] \
+           && ! diff -rq "$d" "$TARGET/.claude/skills/$n" >/dev/null 2>&1; then
+            keep_old ".claude/skills/$n"
+        fi
+        if [[ -e "$TARGET/.claude/skills/$n" ]]; then
+            echo "= .claude/skills/$n (exists, kept)"
+        else
+            cp -a "$d" "$TARGET/.claude/skills/$n" && echo "+ .claude/skills/$n"
+        fi
+    done
+done
+
+# Skills that were renamed (old-name:new-name) or removed (old-name:). A project set up with an older
+# version still has the old folder, so both would show up in the / menu.
+RENAMED=(archmap:re-map archdoc:re-doc explain:re-explain re-code: re-port:)
+stale=()
+for pair in "${RENAMED[@]}"; do
+    old="${pair%%:*}"; new="${pair##*:}"
+    [[ -d "$TARGET/.claude/skills/$old" ]] || continue
+    if [[ -n "$new" ]]; then why="replaced by $new"; else why="no longer part of this version"; fi
+    if [[ "$MIGRATE" == 1 ]]; then
+        if [[ -n "$new" && ! -d "$TARGET/.claude/skills/$new" ]]; then
+            echo "! .claude/skills/$old kept: its replacement $new is not installed"
+            continue
+        fi
+        keep_old ".claude/skills/$old" && echo "  ($why)"
+    else
+        stale+=("$old ($why)")
+    fi
+done
+if (( ${#stale[@]} )); then
+    echo
+    echo "NOTE: skills from an older version are still in .claude/skills/:"
+    printf '        %s\n' "${stale[@]}"
+    echo "      Both names would appear in the / menu. Move the old ones away with:"
+    echo "        decompile-init --migrate${TARGET:+ $TARGET}"
+fi
+
+# Results of an older version lived in the project root; now they are under docs/.
+moved_results=()
+for r in ARCHITECTURE.md map explain spec walkthrough; do
+    [[ -e "$TARGET/$r" ]] || continue
+    if [[ "$MIGRATE" == 1 ]]; then
+        if [[ -e "$TARGET/docs/$r" ]]; then
+            echo "! $r kept in place: docs/$r exists already"
+        else
+            mkdir -p "$TARGET/docs" && mv "$TARGET/$r" "$TARGET/docs/$r" && echo "> $r moved to docs/$r"
+        fi
+    else
+        moved_results+=("$r")
+    fi
+done
+# Cards of an older version are flat in review/; now they are in review/<id>/.
+if [[ "$MIGRATE" == 1 ]] && compgen -G "$TARGET/review/*.md" >/dev/null; then
+    if [[ -f "$TARGET/decompile.yaml" ]] && cur="$(cd "$TARGET" && re get current 2>/dev/null)" && [[ -n "$cur" ]]; then
+        mkdir -p "$TARGET/review/$cur" && mv "$TARGET"/review/*.md "$TARGET/review/$cur/" && echo "> review/*.md moved to review/$cur/"
+    else
+        echo "  review/*.md: re init <binary> moves these cards into review/<id>/"
+    fi
+fi
+if (( ${#moved_results[@]} )); then
+    echo
+    echo "NOTE: results of an older version are in the project root: ${moved_results[*]}"
+    echo "      This version keeps them under docs/. Move them (and update CLAUDE.md, skills) with:"
+    echo "        decompile-init --migrate${TARGET:+ $TARGET}"
+fi
+
+echo
+echo "Project ready in: $(cd "$TARGET" && pwd)"
+if [[ -f "$TARGET/decompile.yaml" ]]; then
+    echo "Next: re status        then: claude"
+else
+    echo "Next: re init <binary>     (identifies it, exports it; takes minutes)   then: claude"
+fi
+echo "Guide (with examples):  less $GUIDE"

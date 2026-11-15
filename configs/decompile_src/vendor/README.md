@@ -1,0 +1,21 @@
+# vendor/ — optional local installers (for offline / no-network builds)
+
+`setup-root.sh` uses whatever is here instead of downloading. Leave it empty to
+download from the official sources at build time.
+
+- `ghidra_*_PUBLIC_*.zip` — a Ghidra release zip. Used instead of the GitHub
+  release. Runs on the system JDK 25 (java-25-openjdk from dnf).
+- `pycdc/` — a local checkout of https://github.com/zrax/pycdc (built here).
+- `dotnet/` — a pre-extracted .NET SDK dir (copied to /opt/dotnet). Advanced;
+  normally the .NET install script from dot.net is fine.
+- `yq_linux_amd64` — mikefarah yq v4.44.3 (checked against the pinned sha256 in
+  setup-root.sh). Used instead of the GitHub release.
+- GUI tools (optional, for offline): `Cutter-*Linux-x86_64.AppImage`,
+  `imhex-*x86_64.AppImage`, `jadx-*.zip`.
+# Note: GhidraMCP (bethington fork) is built from source at image-build time
+# (Maven, against the installed Ghidra), so it needs network for its build deps
+# and has no vendor slot here. For a fully offline build, build it once on a
+# machine with network and install the resulting target/GhidraMCP-*.zip plus the
+# bridge by hand (see docs/GUIDE.md).
+
+Nothing here is committed by default; this folder just needs to exist.

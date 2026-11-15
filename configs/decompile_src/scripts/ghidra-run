@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""ghidra-run - run a PyGhidra script on one binary of the project, headless.
+
+Usage:  ghidra-run [--skip-analysis] <id|binary> <script.py> [script args ...]
+
+All binaries share the project's Ghidra project, ghidra/project.gpr (the same
+file you open in the Ghidra window). Inside it, each program is named after
+its id from decompile.yaml, so two binaries with the same file name stay
+separate. A program that is already there is not imported or analyzed again,
+and it is saved at the end (names from td32-import stay).
+
+Used by exportjson.sh, td32-import, contextpack.sh and decompile.sh.
+"""
+
+import inspect
+import os
+import subprocess
+import sys
+
+NEEDED = ("project_location", "project_name", "program_name", "nested_project_location", "analyze")
+
+
+def die(msg, code=1):
+    print("ghidra-run: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return
+    skip = False
+    if argv[0] == "--skip-analysis":
+        skip, argv = True, argv[1:]
+    if len(argv) < 2:
+        die("usage: ghidra-run [--skip-analysis] <id|binary> <script.py> [args ...]", 2)
+    target, script, script_args = argv[0], argv[1], argv[2:]
+
+    r = subprocess.run(["re", "resolve", target], stdout=subprocess.PIPE, text=True)
+    if r.returncode != 0 or "\t" not in r.stdout:
+        sys.exit(r.returncode or 1)
+    bid, binary = r.stdout.strip().split("\t", 1)
+
+    # Stop with a clear message if the Ghidra window holds the project.
+    if subprocess.run(["re", "ghidra-check"]).returncode != 0:
+        sys.exit(1)
+
+    try:
+        import pyghidra
+    except ImportError:
+        die("the pyghidra Python package is missing (it comes with Ghidra; see the build log)")
+    params = inspect.signature(pyghidra.run_script).parameters
+    missing = [p for p in NEEDED if p not in params]
+    if missing:
+        die("pyghidra %s is too old: run_script() lacks %s. Without them the project would be "
+            "created in the wrong place. Update it (pip install -U pyghidra) or rebuild the image."
+            % (getattr(pyghidra, "__version__", "?"), ", ".join(missing)))
+
+    os.environ.setdefault("GHIDRA_INSTALL_DIR", os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
+    os.makedirs("ghidra", exist_ok=True)
+    print("== %s: %s in ghidra/project.gpr (program '%s')%s =="
+          % (os.path.basename(script), binary, bid, ", no analysis" if skip else ""))
+    pyghidra.run_script(
+        binary, script,
+        project_location=os.path.abspath("ghidra"),
+        project_name="project",
+        script_args=script_args,
+        analyze=not skip,
+        program_name=bid,
+        nested_project_location=False,
+    )
+
+
+if __name__ == "__main__":
+    main()

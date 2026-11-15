@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# ghidra-bg — start/stop the Ghidra GUI detached, so one terminal stays free for
+# `claude`. Targets the VNC display (:1) by default. Only needed for the live
+# GhidraMCP loop (Mode B); headless (exportjson.sh etc.) needs none of this.
+#
+# Usage:
+#   ghidra-bg [start]   start Ghidra in the background (no-op if already running)
+#   ghidra-bg stop      stop it (kills the whole process group)
+#   ghidra-bg status    running? + PID
+#   ghidra-bg log       follow the log
+
+set -euo pipefail
+
+LOG="${GHIDRA_BG_LOG:-$HOME/ghidra-bg.log}"
+PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/ghidra-bg.pid"
+export DISPLAY="${DISPLAY:-:1}"
+
+running() {                       # echoes PID and returns 0 if alive
+    [[ -f "$PIDFILE" ]] || return 1
+    local pid; pid="$(cat "$PIDFILE" 2>/dev/null)" || return 1
+    [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null && { echo "$pid"; return 0; }
+    return 1
+}
+
+case "${1:-start}" in
+    start)
+        if pid="$(running)"; then
+            echo "Ghidra already running (PID $pid) on DISPLAY $DISPLAY"
+            exit 0
+        fi
+        command -v ghidraRun >/dev/null || { echo "ghidraRun not on PATH" >&2; exit 1; }
+        # setsid => new session leader, so PID == PGID and we can kill the group.
+        setsid ghidraRun >"$LOG" 2>&1 </dev/null &
+        echo $! > "$PIDFILE"
+        echo "Started Ghidra (PID $(cat "$PIDFILE")) on DISPLAY $DISPLAY"
+        echo "Log: $LOG   ·   open the VNC desktop to see the window"
+        ;;
+    stop)
+        if pid="$(running)"; then
+            kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+            rm -f "$PIDFILE"
+            echo "Stopped Ghidra (PID $pid)"
+        else
+            echo "Ghidra is not running"
+            rm -f "$PIDFILE"
+        fi
+        ;;
+    status)
+        if pid="$(running)"; then echo "running (PID $pid, DISPLAY $DISPLAY)";
+        else echo "not running"; fi
+        ;;
+    log)
+        exec tail -n +1 -f "$LOG"
+        ;;
+    *)
+        echo "usage: ghidra-bg [start|stop|status|log]" >&2
+        exit 2
+        ;;
+esac

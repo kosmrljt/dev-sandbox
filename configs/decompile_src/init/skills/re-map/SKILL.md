@@ -1,0 +1,123 @@
+---
+name: re-map
+description: For a compiled binary without source code - build or refresh an interactive, clickable map (docs/map/index.html) of the binary being analyzed - modules, external resources, data flows, each marked confirmed or hypothesis with evidence. Use when the user asks for a map, a graph, a module map, a call graph or something clickable to explore. A written architecture description is /re-doc.
+argument-hint: "[id] [--refresh]"
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(exportjson.sh *), Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-map/*), Bash(ls *), Bash(file *)
+---
+
+# /re-map - architecture map of the analyzed binary
+
+Arguments: `$ARGUMENTS` (optional binary id from decompile.yaml, default `current`;
+`--refresh` = keep existing modules, only update them from new cards in review/<id>/).
+
+The page is built by a fixed script. Your only job is to write `docs/map/modules.json`
+exactly in the schema below, grounded in evidence. Never write the HTML yourself.
+
+## Step 1 - Facts
+
+1. The binary: the id given, otherwise `current`. If `re status` says its export
+   is missing, run `exportjson.sh <id>`.
+2. Query the export with `outq -b <id>`, never by loading it whole: `info` (counts,
+   real names or not, entry points), `ls` (callers, callees and strings per
+   function), `roots` (functions reached only through pointers); groupings and
+   counts with `outq sql "..."`.
+3. Read every card in `review/<id>/`. `## My notes` is the user's and wins over your own
+   reading; `## Analysis` is earlier analysis and counts as evidence only where it
+   cites its own.
+
+## Step 2 - Decide what to leave out
+
+Skip thunks, externals, and library/runtime code. Treat a function as library when
+it has many callers, no program-specific strings, and a known runtime shape
+(string/memory helpers, CRT start-up, Delphi `System`/`SysUtils` units, `__vba*`).
+Record every skipped group in `skipped` with the pattern and the reason.
+
+## Step 3 - Modules
+
+Group the remaining functions into 3 to 12 modules. Use evidence in this order:
+
+1. Real names: namespaces from TD32 (`Unit::Class::Method`), exports, RTTI.
+2. Shared program strings and imports: file I/O, registry, network, UI, drawing.
+3. Call-graph clusters: functions mostly calling each other and called from one place.
+
+Rules:
+- Each function belongs to at most one module. Leave a function out rather than guess.
+- `status: "confirmed"` only if the grouping is backed by real names, by review/ cards,
+  or by xrefs you can cite. Everything else is `"hypothesis"`.
+- `evidence` lists concrete items: `"0x00401a30: references \"scores.dat\""`,
+  `"TD32 namespace Unit1::TMainForm"`, `"review/app/save_scores.md"`. No evidence = no module.
+- `name` says what the module does in 1 to 4 words; `summary` is one sentence.
+  Do not take names from a single string.
+
+## Step 4 - Resources and flows
+
+- `resources`: things outside the program it touches - files, registry keys, hosts,
+  dialogs/windows, devices. `kind` is one of `file`, `registry`, `network`, `ui`,
+  `device`, `other`. Name them by their real value (`scores.dat`, `HKCU\Software\X`).
+- `flows`: arrows module -> resource or module -> module that carry data, with a short
+  verb label (`reads`, `writes`, `sends`, `draws`). Each has an address as evidence.
+
+## Step 5 - Next steps
+
+`next`: the 5 functions whose analysis would most improve the map (unplaced
+functions called by several modules, hypothesis modules with one strong lead).
+
+## Schema of docs/map/modules.json
+
+```json
+{
+  "program": "GAME.EXE",
+  "modules": [
+    {
+      "id": "persist",
+      "name": "Score storage",
+      "summary": "Loads and saves the high-score table.",
+      "status": "confirmed",
+      "functions": ["FUN_00402210", "FUN_00401a30"],
+      "evidence": ["0x00402210: opens \"scores.dat\" with CreateFileA", "review/app/save_scores.md"]
+    }
+  ],
+  "resources": [
+    {"id": "scores_dat", "kind": "file", "name": "scores.dat",
+     "evidence": ["string at 0x0040c120"]}
+  ],
+  "flows": [
+    {"from": "persist", "to": "scores_dat", "label": "writes", "status": "confirmed",
+     "evidence": "WriteFile call at 0x00402238"}
+  ],
+  "skipped": [
+    {"pattern": "Delphi System unit (@LStr*, @Halt*)", "reason": "runtime library, 210 callers"}
+  ],
+  "next": [
+    {"function": "FUN_00403000", "why": "called by 3 modules, no strings; likely shared parser"}
+  ]
+}
+```
+
+`id` values: lowercase letters, digits and `_`, unique across modules and resources.
+Function names must match the `name` field of the export exactly (it is
+namespace-qualified, e.g. `Unit1::TMainForm::FormCreate`).
+
+## Step 6 - Build and check
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/archmap.py --check     # validates against the export of current
+python3 ${CLAUDE_SKILL_DIR}/archmap.py               # writes docs/map/index.html
+```
+
+Fix every problem `--check` reports and run it again. Do not edit `archmap.py`.
+
+## Step 7 - Report (short)
+
+- Modules: how many confirmed, how many hypothesis.
+- Functions placed / not placed: quote the counts line that `archmap.py` prints, do
+  not count by hand. "Skipped" groups are part of "not placed".
+- The 5 `next` functions, one line each.
+- Tell the user to open `docs/map/index.html` on the host (the project folder is mounted).
+- Add a line to LOG.md.
+
+For another binary than `current`, give the script its files:
+`--export "$(outq -b <id> path)" --review review/<id>`.
+
+With `--refresh`: read the existing `docs/map/modules.json`, change only what new
+review/ cards or new evidence justify, and list each change (module, old -> new, evidence).

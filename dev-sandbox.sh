@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # DEFAULT_* and PROFILE_* vars accessed via indirect refs (${!ref})
+# shellcheck disable=SC1090  # Non-constant source is intentional (--config)
+# shellcheck disable=SC2054  # Commas in tmpfs mount options are not array separators
 # ═══════════════════════════════════════════════════════════════════════
 #  dev-sandbox — Sandboxed AI Coding Agents with Podman & krun microVMs
 # ═══════════════════════════════════════════════════════════════════════
@@ -85,7 +88,7 @@ fi
 SANDBOX_BASE="${HOME}/.dev-sandbox"     # Build files location
 BASE_IMAGE_NAME="dev-sandbox-base"      # Base podman image name
 # Default profile is the first entry in ALL_PROFILES
-VERSION="1.1.2"                         # dev-sandbox version
+VERSION="1.1.3"                         # dev-sandbox version
 
 # Base OS
 BASE_OS="fedora:44"
@@ -172,7 +175,7 @@ DEFAULT_ENV_PASS=()                     # Env vars passed through from host (KEY
 DEFAULT_VOLUMES=(.cache)
 DEFAULT_PODMAN_ARGS=(
     --tmpfs /var/log:rw,size=50m,mode=1777
-    --tmpfs /tmp:rw,size=200m,mode=1777
+    --tmpfs /tmp:rw,size=400m,mode=1777
 )
 DEFAULT_ROOT_STARTUP=''
 DEFAULT_ROOT_WRAPPERS=()
@@ -189,6 +192,9 @@ fi
 export HISTFILE="$HOME/.local/etc/.bash_history"
 export HISTSIZE=10000
 export HISTFILESIZE=20000
+
+# npm global packages in persistent volume (no sudo needed)
+npm config set prefix ~/.local 2>/dev/null
 
 # Aliases
 alias ll="ls -la"
@@ -322,7 +328,7 @@ PROFILE_research_VOLUMES=(
 PROFILE_research_PODMAN_ARGS=(
     --shm-size 2g
     --tmpfs /var/log:rw,size=50m,mode=1777
-    --tmpfs /tmp:rw,size=200m,mode=1777
+    --tmpfs /tmp:rw,size=400m,mode=1777
 )
 
 
@@ -348,7 +354,7 @@ PROFILE_vncgui_VOLUMES=(
 )
 PROFILE_vncgui_PODMAN_ARGS=(
     --shm-size 2g
-    -p 5901:5901
+    -p 127.0.0.1:5901:5901
     --tmpfs /var/log:rw,size=50m,mode=1777
     --tmpfs /tmp:rw,size=200m,mode=1777
 )
@@ -357,38 +363,97 @@ PROFILE_vncgui_ENV=(
     "DISPLAY=:1"
 )
 PROFILE_vncgui_ROOT_STARTUP='
-# Set VNC password on first run
+U=dev
+
+# 1. Prepare X11 socket directory as root (fixes _XSERVTransmkdir error and window opening issues)
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+mkdir -p /tmp/.X11-unix /var/run/dbus
+chmod 1777 /tmp/.X11-unix
+
+# Start system D-Bus if available so desktop apps and Thunar do not hang waiting for it
+if command -v dbus-daemon >/dev/null 2>&1; then
+    dbus-uuidgen --ensure 2>/dev/null || true
+    dbus-daemon --system --fork 2>/dev/null || true
+fi
+
+# 2. Setup user directories
+mkdir -p "/home/${U}/.vnc"
+mkdir -p "/home/${U}/.config/xfce4/xfconf/xfce-perchannel-xml"
+mkdir -p "/home/${U}/.config/autostart"
+
+# Generate VNC password file if it does not exist yet
 if [ ! -f "/home/${U}/.vnc/passwd" ]; then
-    mkdir -p "/home/${U}/.vnc"
     echo "${SANDBOX_VNC_PASS:-sandbox}" | vncpasswd -f > "/home/${U}/.vnc/passwd"
     chmod 600 "/home/${U}/.vnc/passwd"
-    echo "▶ VNC password set (default: sandbox)"
 fi
 
-# Create xstartup for XFCE (without systemd)
-if [ ! -f "/home/${U}/.vnc/xstartup" ]; then
-    {
-        echo "#!/bin/bash"
-        echo "unset SESSION_MANAGER"
-        echo "unset DBUS_SESSION_BUS_ADDRESS"
-        echo "export XDG_SESSION_TYPE=x11"
-        echo "eval \$(dbus-launch --sh-syntax)"
-        echo "xfwm4 &"
-        echo "xfdesktop &"
-        echo "xfce4-panel &"
-        echo "thunar --daemon &"
-        echo "wait"
-    } > "/home/${U}/.vnc/xstartup"
-    chmod +x "/home/${U}/.vnc/xstartup"
+# 3. Disable compositing and enable outline dragging/resizing directly via XML
+# Note: Using <<"XML" instead of single quotes so we do not break the outer single-quoted variable!
+cat > "/home/${U}/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" <<"XML"
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="use_compositing" type="bool" value="false"/>
+    <property name="box_move" type="bool" value="true"/>
+    <property name="box_resize" type="bool" value="true"/>
+  </property>
+</channel>
+XML
+
+# 4. Prevent PolicyKit agents from autostarting
+cat > "/home/${U}/.config/autostart/xfce-polkit.desktop" <<"AUTOSTART"
+[Desktop Entry]
+Hidden=true
+AUTOSTART
+
+# 5. Create the VNC xstartup script
+# Note: Using <<"XSTARTUP" and escaping \$ so variables evaluate at VNC runtime as user dev, NOT now as root!
+cat > "/home/${U}/.vnc/xstartup" <<"XSTARTUP"
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+export DISPLAY=:1
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+# Start an isolated D-Bus session bus for the VNC user
+if command -v dbus-launch >/dev/null 2>&1; then
+    eval $(dbus-launch --sh-syntax)
+    export DBUS_SESSION_BUS_ADDRESS
+    export DBUS_SESSION_BUS_PID
 fi
 
-chown -R "${U}:${U}" "/home/${U}/.vnc"
+# 1st: Start window manager first and wait briefly so it registers _NET_WORKAREA
+xfwm4 --compositor=off --sm-client-disable &
+sleep 1
 
-# Start VNC server
-su - "${U}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>/dev/null || true
-echo "▶ VNC server started on :5901"
+# 2nd: Start settings daemon
+xfsettingsd --replace --sm-client-disable &
+
+# 3rd: Start desktop and panel after window manager is ready
+xfdesktop --sm-client-disable &
+xfce4-panel --sm-client-disable &
+thunar --daemon &
+
+# Keep xstartup running
+wait
+XSTARTUP
+
+# Pre-create .Xauthority so xauth does not complain that the file is missing
+touch "/home/${U}/.Xauthority"
+
+# Set executable permissions and fix ownership (including .Xauthority)
+chmod +x "/home/${U}/.vnc/xstartup"
+chown -R "${U}:${U}" "/home/${U}/.vnc" "/home/${U}/.config" "/home/${U}/.Xauthority"
+
+# Launch TigerVNC and silence the deprecated wrapper warning + stdout noise
+su - "${U}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no >/dev/null 2>&1"
+echo "VNC server started on :5901 (connect 127.0.0.1:5901)"
+
 '
-
 
 # ─── Profile registry ─────────────────────────────────────────────────
 ALL_PROFILES=(claude agy research vncgui)
@@ -600,6 +665,11 @@ generate_profile_dockerfile() {
     local phome
     phome=$(profile_home "$profile")
 
+    local ctx_copy=""
+    if [[ -d "${phome}/ctx" ]]; then
+        ctx_copy="COPY ctx /opt/ctx"
+    fi
+
     local extra_dnf=()
     get_profile_array_ref "$profile" DNF extra_dnf
     local dnf_line=""
@@ -635,6 +705,8 @@ generate_profile_dockerfile() {
 
     cat > "${phome}/Dockerfile" << DEOF
 FROM ${BASE_IMAGE_NAME}:latest
+
+${ctx_copy}
 
 ${dnf_line}
 
@@ -672,10 +744,37 @@ generate_entrypoint() {
             cat > \"\${ROOTCONF}/wrappers/${wname}\" << 'WRAPEOF'
 ${wbody}
 WRAPEOF
+            chmod +x \"\${ROOTCONF}/wrappers/${wname}\"
             echo \"▶ Generated wrapper: ${wname}\"
         fi"
         fi
     done
+
+    # install_agent wrapper — generated from AGENTS so you can (re)install the
+    # agent manually inside the sandbox (runs as dev, into ~/.local; persists).
+    local agents=()
+    get_profile_array_ref "$profile" AGENTS agents
+    local agent_cmds=""
+    for a in "${agents[@]}"; do
+        local clean
+        clean=$(echo "$a" | sed 's/#.*//g' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
+        [[ -n "$clean" ]] && agent_cmds="${agent_cmds}${clean}
+"
+    done
+    local agent_wrapper_block=""
+    if [[ -n "$agent_cmds" ]]; then
+        agent_wrapper_block="
+        if [ ! -f \"\${ROOTCONF}/wrappers/install_agent\" ]; then
+            cat > \"\${ROOTCONF}/wrappers/install_agent\" << 'IAEOF'
+#!/bin/bash
+set -e
+echo \"▶ Installing/updating agent(s) ...\"
+${agent_cmds}echo \"✓ install_agent done — restart the agent if it was running.\"
+IAEOF
+            chmod +x \"\${ROOTCONF}/wrappers/install_agent\"
+            echo \"▶ Generated wrapper: install_agent\"
+        fi"
+    fi
 
     local dotfiles=()
     get_profile_array_ref "$profile" DEV_DOTFILES dotfiles
@@ -752,6 +851,7 @@ STARTUPEOF
 
     # Command wrappers
 ${wrapper_init_block}
+${agent_wrapper_block}
 
     # ── 4. Run startup hook ──
     if [ -f "\${ROOTCONF}/startup.sh" ]; then
@@ -759,12 +859,12 @@ ${wrapper_init_block}
             echo "⚠ startup.sh exited non-zero — continuing"
     fi
 
-    # Install wrappers into PATH
+    # Install wrappers into PATH (symlinks → edits in the volume take effect live)
     if [ -d "\${ROOTCONF}/wrappers" ]; then
         for w in "\${ROOTCONF}/wrappers/"*; do
             if [ -f "\$w" ]; then
-                cp "\$w" /usr/local/bin/
-                chmod +x "/usr/local/bin/\$(basename "\$w")"
+                chmod +x "\$w"
+                ln -sf "\$w" "/usr/local/bin/\$(basename "\$w")"
             fi
         done
     fi
@@ -925,20 +1025,20 @@ PXYEOF
     {
         echo "# Auto-generated on each container start — do not edit"
         echo "# PATH: ~/.local/bin at end to prevent agent from shadowing system binaries"
-        echo "export PATH=\"\${PATH}\""
-        echo "export CLAUDE_CONFIG_DIR=\"\${CLAUDE_CONFIG_DIR}\""
-        echo "export PYTHONUSERBASE=\"\${PYTHONUSERBASE}\""
+        printf 'export PATH=%q\n' "\${PATH}"
+        printf 'export CLAUDE_CONFIG_DIR=%q\n' "\${CLAUDE_CONFIG_DIR}"
+        printf 'export PYTHONUSERBASE=%q\n' "\${PYTHONUSERBASE}"
         if [ -n "\${SANDBOX_COLOR:-}" ]; then
-            echo "export SANDBOX_COLOR=\"\${SANDBOX_COLOR}\""
+            printf 'export SANDBOX_COLOR=%q\n' "\${SANDBOX_COLOR}"
         fi
         if [ -n "\${SANDBOX_PROFILE:-}" ]; then
-            echo "export SANDBOX_PROFILE=\"\${SANDBOX_PROFILE}\""
+            printf 'export SANDBOX_PROFILE=%q\n' "\${SANDBOX_PROFILE}"
         fi
         # Proxy vars only when set
         for _pvar in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY; do
             _val="\$(printenv \$_pvar 2>/dev/null)" || true
             if [ -n "\$_val" ]; then
-                echo "export \${_pvar}=\"\${_val}\""
+                printf 'export %s=%q\n' "\$_pvar" "\$_val"
             fi
         done
         # Custom env vars from --env / PROFILE_*_ENV
@@ -947,7 +1047,7 @@ PXYEOF
             for _evar in "\${_EVARS[@]}"; do
                 _val="\$(printenv \$_evar 2>/dev/null)" || true
                 if [ -n "\$_val" ]; then
-                    echo "export \${_evar}=\"\${_val}\""
+                    printf 'export %s=%q\n' "\$_evar" "\$_val"
                 fi
             done
         fi
@@ -1058,6 +1158,7 @@ do_build() {
 do_run() {
     local profile="$1"
     shift
+    local -a HOOK_PODMAN_ARGS=()      # pre-run hooks append dynamic podman flags here
 
     local image_name
     image_name=$(profile_image "$profile")
@@ -1076,6 +1177,7 @@ do_run() {
 
     if ! pcmd image exists "${image_name}" 2>/dev/null; then
         warn "Image not found. Building ..."
+        check_prereqs            # only needed before a build; skipped when the image exists
         do_build "$profile"
     fi
 
@@ -1096,6 +1198,10 @@ do_run() {
     local vol_flags=()
     for vdir in "${extra_vols[@]}"; do
         if [[ -n "$vdir" ]]; then
+            if [[ "$vdir" == /* || "$vdir" =~ \.\. ]]; then
+                err "Invalid volume path in profile: $vdir"
+                exit 1
+            fi
             local vname="${profile}-sandbox-${vdir#.}"
             vol_flags+=(-v "${vname}:/home/dev/${vdir}")
         fi
@@ -1393,9 +1499,24 @@ do_run() {
     #    fi
     #done
 
+    # Register teardown before the pre-run hooks, so post-run hooks still fire
+    # if a pre-run hook aborts. (After the early exits above → no empty teardown.)
+    trap '_sandbox_teardown' EXIT
+    local _h
+    for _h in "${PRE_RUN_HOOKS[@]}"; do
+        [[ -n "$_h" ]] || continue
+        declare -F "$_h" >/dev/null || continue
+        "$_h" "$profile"
+    done
+
+    # Ignore Ctrl+Z (SIGTSTP) — prevents accidental suspend of podman run
+    trap '' TSTP
+
     pcmd run --rm -it \
         --name "${container_name}" \
         --hostname "${profile}-sandbox" \
+        --label dev-sandbox=1 \
+        --label "dev-sandbox-profile=${profile}" \
         "${krun_flags[@]}" \
         "${net_flags[@]}" \
         "${ssh_flags[@]}" \
@@ -1410,6 +1531,7 @@ do_run() {
         "${vol_flags[@]}" \
         -w "${mount_point}" \
         "${env_flags[@]}" \
+        "${HOOK_PODMAN_ARGS[@]}" \
         "${image_name}" \
         "$@" \
     || true
@@ -1427,28 +1549,34 @@ do_list() {
     info "Running sandboxes:"
     echo ""
 
-    local found=false
-    for p in "${ALL_PROFILES[@]}"; do
-        local containers
-        containers=$(pcmd ps --filter "name=${p}-" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>/dev/null)
-        if [[ -n "$containers" ]]; then
-            found=true
-            while IFS='|' read -r name status ports; do
-                local ssh_info=""
-                if [[ -n "$ports" ]]; then
-                    ssh_info=$(echo "$ports" | grep -oP '\d+->22' | head -1)
-                    if [[ -n "$ssh_info" ]]; then
-                        ssh_info=" ssh:${ssh_info}"
-                    fi
-                fi
-                echo -e "  ${CYAN}${name}${NC}  ${status}${ssh_info}"
-            done <<< "$containers"
-        fi
-    done
+    # List every sandbox by its image (*-sandbox-image) 
+    local containers
+    containers=$(pcmd ps --format "{{.Names}}|{{.Status}}|{{.Ports}}|{{.Image}}" 2>/dev/null)
 
-    if [[ "$found" != "true" ]]; then
-        echo "  No running sandboxes"
+    local found=false
+    if [[ -n "$containers" ]]; then
+        while IFS='|' read -r name status ports image; do
+            [[ -n "$name" ]] || continue
+            case "$image" in *-sandbox-image*) ;; *) continue ;; esac   # only our sandboxes
+            found=true
+            local ssh_info=""
+            if [[ -n "$ports" ]]; then
+                # || true: no :22 mapping is normal (SSH off) and must not abort under set -e
+                ssh_info=$(echo "$ports" | grep -oP '\d+->22' | head -1 || true)
+                [[ -n "$ssh_info" ]] && ssh_info=" ssh:${ssh_info}"
+            fi
+            # Host project dir = source of the /app/... bind mount (works for any
+            # container, no label needed). || true so inspect failures don't abort.
+            local workdir
+            workdir=$(pcmd inspect "$name" --format \
+                '{{range .Mounts}}{{.Source}}:{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null \
+                | awk -F: '$2 ~ /^\/app\// {print $1; exit}' || true)
+            echo -e "  ${CYAN}${name}${NC}  ${status}${ssh_info}"
+            [[ -n "$workdir" ]] && echo -e "      ${workdir}"
+        done <<< "$containers"
     fi
+
+    [[ "$found" == true ]] || echo "  No running sandboxes"
     echo ""
 }
 
@@ -1727,7 +1855,7 @@ ${GREEN}Commands:${NC}
 
 ${GREEN}Profile & Config:${NC}
   -p <profile>            Select profile (default: ${DEFAULT_PROFILE})
-  --config PATH           Source custom shell configuration/profile script
+  --config PATH[,PATH...] Source config/profile scripts (repeatable; comma-separated list)
 
 ${GREEN}Runtime & Isolation:${NC}
   --krun                  Force krun microVM isolation (default)
@@ -1776,48 +1904,93 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════
 
 # Pre-scan for --config (must load before profile validation)
-# Config file lookup: absolute/relative path first, then ~/.dev-sandbox/
+# Config file lookup: the name as given, then with .sh / .conf appended; each
+# tried in the current directory first, then in ~/.dev-sandbox/ (SANDBOX_BASE).
+# So `--config run_ssh_proxy` finds ./run_ssh_proxy.sh or ~/.dev-sandbox/run_ssh_proxy.conf.
 _resolve_config() {
-    local cfg="$1"
-    if [[ -f "$cfg" ]]; then
-        echo "$cfg"
-    elif [[ "$cfg" != /* ]] && [[ -f "${SANDBOX_BASE}/${cfg}" ]]; then
-        echo "${SANDBOX_BASE}/${cfg}"
-    else
-        echo ""
-    fi
+    local cfg="$1" base c
+    for base in "" "${SANDBOX_BASE}/"; do
+        [[ -n "$base" && "$cfg" == /* ]] && continue   # SANDBOX_BASE only for relative names
+        for c in "$cfg" "$cfg.sh" "$cfg.conf"; do
+            if [[ -f "${base}${c}" ]]; then
+                echo "${base}${c}"
+                return 0
+            fi
+        done
+    done
+    echo ""
+}
+
+# Load one or more configs given as a comma-separated list (e.g.
+# "--config run_ssh_proxy,bg_color"). Each entry is resolved and sourced in order.
+_load_configs() {
+    local list="$1" cfg resolved
+    IFS=',' read -ra _cfgs <<< "$list"
+    for cfg in "${_cfgs[@]}"; do
+        [[ -n "$cfg" ]] || continue
+        resolved=$(_resolve_config "$cfg")
+        if [[ -n "$resolved" ]]; then
+            echo "Load $resolved"
+            source "$resolved"
+        else
+            echo "✗ Config file not found: $cfg" >&2
+            echo "  Searched $cfg (and .sh/.conf) in $(pwd) and ${SANDBOX_BASE}" >&2
+            exit 1
+        fi
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Run hooks — pre/post-run extension points
+#
+#  A --config file registers hook functions by name:
+#     PRE_RUN_HOOKS+=(my_pre)    # runs just before `pcmd run`, $1 = profile
+#     POST_RUN_HOOKS+=(my_post)  # runs after the container exits (also on Ctrl-C)
+#
+#  A pre-run hook may append podman flags to HOOK_PODMAN_ARGS (global + dynamic,
+#  spliced into `pcmd run` before the image name — unlike the static per-profile
+#  PROFILE_<p>_PODMAN_ARGS). A pre-run error aborts the run; a post-run error is
+#  only reported and the rest still run.
+#
+#  Usage example — copy into a --config file and uncomment:
+#     _my_pre() {                                           # $1 = profile
+#         _MY_DIR=$(mktemp -d)                              # set something up
+#         HOOK_PODMAN_ARGS+=(-v "${_MY_DIR}:/run/sandbox")  # expose it (optional)
+#         echo "> start"
+#     }
+#     _my_post() {                                          # tear the same down
+#         rm -rf "${_MY_DIR:-/nonexistent}"
+#         echo "> end"
+#     }
+#     PRE_RUN_HOOKS+=(_my_pre)
+#     POST_RUN_HOOKS+=(_my_post)
+# ═══════════════════════════════════════════════════════════════════════
+declare -ga PRE_RUN_HOOKS=()
+declare -ga POST_RUN_HOOKS=()
+
+# Runs every registered post-run hook; one failing hook does not stop the rest.
+_sandbox_teardown() {
+    local _h
+    for _h in "${POST_RUN_HOOKS[@]}"; do
+        [[ -n "$_h" ]] || continue
+        declare -F "$_h" >/dev/null || continue
+        "$_h" || warn "run hook '$_h' failed"
+    done
 }
 
 _args=("$@")
 for (( _i=0; _i<${#_args[@]}; _i++ )); do
     case "${_args[$_i]}" in
         --config=*)
-            _cfg="${_args[$_i]#*=}"
-            _resolved=$(_resolve_config "$_cfg")
-            if [[ -n "$_resolved" ]]; then
-                echo "Load $_resolved"
-                source "$_resolved"
-            else
-                echo "✗ Config file not found: $_cfg" >&2
-                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
-                exit 1
-            fi
+            _load_configs "${_args[$_i]#*=}"
             ;;
         --config)
             _cfg="${_args[$((_i+1))]:-}"
             if [[ -z "$_cfg" ]]; then
                 echo "✗ Missing config file path after --config" >&2; exit 1
             fi
-            _resolved=$(_resolve_config "$_cfg")
-            if [[ -n "$_resolved" ]]; then
-                echo "Load $_resolved"
-                source "$_resolved"
-                ((_i++)) || true
-            else
-                echo "✗ Config file not found: $_cfg" >&2
-                echo "  Searched: $(pwd)/$_cfg and ${SANDBOX_BASE}/$_cfg" >&2
-                exit 1
-            fi
+            _load_configs "$_cfg"
+            ((_i++)) || true
             ;;
     esac
 done
@@ -1829,7 +2002,6 @@ if [[ ${#ALL_PROFILES[@]} -eq 0 ]]; then
 fi
 DEFAULT_PROFILE="${ALL_PROFILES[0]}"
 PROFILE="${DEFAULT_PROFILE}"
-CONFIG_FILE=""              # --config /path/to/config.sh
 USE_KRUN=true
 KRUN_CLI_SET=""             # Set to "true" when --krun/--no-krun is used
 TSI_OVERRIDE=false          # --tsi (force TSI networking, skip passt)
@@ -2038,6 +2210,19 @@ if [[ -n "$PROXY_SHORTCUT" ]] && ! [[ "$PROXY_SHORTCUT" =~ ^[0-9]+$ ]]; then
 fi
 
 # Conflict detection
+# TSI check must account for profile-resolved NET_MODE
+_effective_net="$NET_MODE"
+if [[ -z "$_effective_net" ]]; then
+    _effective_net=$(get_profile_var "$PROFILE" NET_MODE)
+fi
+_effective_net="${_effective_net:-open}"
+
+if [[ "$TSI_OVERRIDE" == "true" ]] && [[ "$_effective_net" == "locked" || "$_effective_net" == "filtered" || ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
+    err "--tsi and network restrictions are incompatible"
+    err "TSI bypasses nftables — firewall rules have no effect"
+    err "Remove --tsi or use --no-krun for working firewall"
+    exit 1
+fi
 if [[ "$NET_MODE" == "locked" ]] && [[ ${#ALLOW_DESTINATIONS[@]} -gt 0 ]]; then
     err "--net locked and --allow are mutually exclusive"
     err "Use --net locked (no exceptions) or --allow (with exceptions)"
@@ -2062,7 +2247,7 @@ case "${1:-}" in
         ;;
     clean)      shift; do_clean "$PROFILE" "${1:-}" ;;
     status)     do_status "$PROFILE" ;;
-    info)       do_info "$PROFILE" ;;
+    info)       check_prereqs; do_info "$PROFILE" ;;
     ls|list)    do_list ;;
     profiles)   do_profiles ;;
     help|--help|-h) usage ;;
@@ -2081,6 +2266,7 @@ case "${1:-}" in
             err "Run 'dev-sandbox help' for usage"
             exit 1
         fi
-        check_prereqs; do_run "$PROFILE" "$@"
+        # No check_prereqs here: do_run runs it only when it must build.
+        do_run "$PROFILE" "$@"
         ;;
 esac

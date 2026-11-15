@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "type": "stdio",
+      "command": "bridge-mcp-ghidra",
+      "args": [],
+      "env": { "GHIDRA_MCP_URL": "http://127.0.0.1:8089" }
+    }
+  }
+}
