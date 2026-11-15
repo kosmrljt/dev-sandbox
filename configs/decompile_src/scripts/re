@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # re - the project's configuration (decompile.yaml) and its start.
 #
-#   re init <binary> [--id ID] [--no-export] [--retype]
+#   re init <binary> [--id ID] [--no-export] [--retype] [--live]
 #                         identify the binary, add it to decompile.yaml, run td32-import
 #                         for Delphi with debug info, then the export (takes minutes).
 #                         For a binary already there the type is kept unless --retype.
+#                         --live: also settings.ghidra_live = true and .mcp.json (Ghidra
+#                         MCP). A new project starts live when DECOMPILE_GHIDRA_LIVE=1.
 #   re status             binaries, settings, active plan phase and next steps
 #   re use <id>           make <id> the current binary
 #   re get <key> [default]    read a value, e.g.  re get settings.lang_docs sl
@@ -13,7 +15,7 @@
 #   re path [id]          path of the binary (default: current)
 #   re export [id]        its export file (out.<id>.json)
 #   re resolve <id|path>  "id<TAB>path"; registers an unknown path (without export)
-#   re ghidra-check       fails with a message if the Ghidra window holds ghidra/project.gpr
+#   re ghidra-check       fails with a message if the Ghidra window holds ghidra-project/project.gpr
 #
 # Run it in the project directory (where decompile.yaml lives). Needs yq (mikefarah, v4).
 set -euo pipefail
@@ -119,22 +121,42 @@ settings:
   ghidra_live: false
 EOF
     ID="$1" w '.current = strenv(ID)'
+    # DECOMPILE_GHIDRA_LIVE=1 (e.g. in ~/.bashrc): every new project starts in live mode.
+    if [[ "${DECOMPILE_GHIDRA_LIVE:-}" == 1 ]]; then w '.settings.ghidra_live = true'; fi
+}
+
+# Live mode needs .mcp.json and the MCP permissions; decompile-init --mcp-only adds
+# just those (a file that exists is kept, permissions are only added).
+mcp_ready() {
+    [[ "$(q '.settings.ghidra_live')" == "true" ]] || return 0
+    [[ -f .mcp.json ]] || decompile-init --mcp-only . | sed 's/^/  /'
+}
+live_hint() {
+    [[ "$(q '.settings.ghidra_live')" == "true" ]] || return 0
+    echo
+    echo "live mode (settings.ghidra_live = true). The export is made headless, so it runs"
+    echo "BEFORE the Ghidra window opens the project. Next:"
+    echo "  1. ghidra-mcp-up       starts Ghidra and waits for the GhidraMCP plugin"
+    echo "  2. in Ghidra, the first time: open ghidra-project/project.gpr, open program '$(q '.current')',"
+    echo "     enable the GhidraMCP plugin (File > Configure)"
+    echo "  3. claude              (/mcp shows \"ghidra\")"
 }
 
 # --- commands ----------------------------------------------------------------
 cmd_init() {
-    local bin="" id="" export=1 retype=0
+    local bin="" id="" export=1 retype=0 live=0
     while (($#)); do
         case "$1" in
             --id) id="${2:?--id needs a value}"; shift ;;
             --no-export) export=0 ;;
             --retype) retype=1 ;;
+            --live) live=1 ;;
             -*) die "unknown option: $1" ;;
             *) bin="$1" ;;
         esac
         shift
     done
-    [[ -n "$bin" ]] || die "usage: re init <binary> [--id ID] [--no-export] [--retype]"
+    [[ -n "$bin" ]] || die "usage: re init <binary> [--id ID] [--no-export] [--retype] [--live]"
     [[ -f "$bin" ]] || die "no such file: $bin"
     bin="$(realpath "$bin")"
 
@@ -166,6 +188,8 @@ cmd_init() {
         echo "  type: $type, because: $reason   (wrong? re set binaries.$id.type <type>)"
     fi
     [[ -n "$(q '.current // ""')" ]] || ID="$id" w '.current = strenv(ID)'
+    if (( live )); then w '.settings.ghidra_live = true'; echo "= settings.ghidra_live = true"; fi
+    mcp_ready
 
     # Cards from before decompile.yaml (flat review/*.md) belong to the first binary.
     if (( first )) && compgen -G "review/*.md" >/dev/null; then
@@ -199,6 +223,7 @@ cmd_init() {
     esac
     echo
     cmd_status
+    live_hint
 }
 
 cmd_status() {
@@ -234,7 +259,8 @@ cmd_status() {
         esac
     done
     if [[ "$(q '.settings.ghidra_live')" == "true" ]]; then
-        echo "  ghidra-mcp-up      (Ghidra window: ghidra/project.gpr, program '$cur' open)"; any=1
+        [[ -f .mcp.json ]] || echo "  decompile-init --mcp-only   (.mcp.json is missing: Claude cannot reach Ghidra)"
+        echo "  ghidra-mcp-up      (Ghidra window: ghidra-project/project.gpr, program '$cur' open)"; any=1
     fi
     (( any )) || echo "  nothing pending: ask Claude"
 }
@@ -245,7 +271,7 @@ cmd_use() {
     has_bin "$id" || die "no binary '$id' (binaries: $(q '.binaries | keys | join(" ")'))"
     ID="$id" w '.current = strenv(ID)'
     echo "current: $id"
-    if [[ "$(q '.settings.ghidra_live')" == "true" ]]; then echo "open program '$id' (in ghidra/project.gpr) in the Ghidra window"; fi
+    if [[ "$(q '.settings.ghidra_live')" == "true" ]]; then echo "open program '$id' (in ghidra-project/project.gpr) in the Ghidra window"; fi
     return 0
 }
 
@@ -267,7 +293,10 @@ cmd_set() {
             V="$val" w ".$key = strenv(V) | .$key style=\"double\"" ;;
         settings.ghidra_live)
             [[ "$val" == true || "$val" == false ]] || die "$key: true or false"
-            w ".$key = $val" ;;
+            w ".$key = $val"
+            if [[ "$val" == true && ! -f .mcp.json ]]; then
+                echo "note: no .mcp.json here; add it with:  decompile-init --mcp-only" >&2
+            fi ;;
         binaries.*.*)
             local id f; id="$(echo "$key" | cut -d. -f2)"; f="$(echo "$key" | cut -d. -f3-)"
             has_bin "$id" || die "no binary '$id' (binaries: $(q '.binaries | keys | join(" ")'))"
@@ -300,19 +329,23 @@ cmd_resolve() {  # id or path -> "id<TAB>path"
 }
 
 cmd_ghidra_check() {
-    # The Ghidra project is ghidra/project.gpr; Ghidra writes ghidra/project.lock while
+    # A project of the previous layout: do not start an empty new one next to it.
+    if [[ -f ghidra/project.gpr && ! -e ghidra-project ]]; then
+        die "the Ghidra project is still in ghidra/ (older layout). Move it with:  decompile-init --migrate   (Ghidra window closed)"
+    fi
+    # The Ghidra project is ghidra-project/project.gpr; Ghidra writes ghidra-project/project.lock while
     # a program holds it. Headless scripts cannot open it then.
-    if compgen -G "ghidra/project.lock*" >/dev/null; then
+    if compgen -G "ghidra-project/project.lock*" >/dev/null; then
         if pgrep -f 'ghidra\.GhidraRun|ghidra\.GhidraLauncher|pyghidraRun|pyghidra.*(-g|--gui)' >/dev/null 2>&1; then
             cat >&2 <<'EOF'
-re: the Ghidra project ghidra/project.gpr is open in the Ghidra window.
+re: the Ghidra project ghidra-project/project.gpr is open in the Ghidra window.
     1. In Ghidra: File > Close Project (or: ghidra-bg stop)
     2. Run the command again
-    3. Open ghidra/project.gpr in Ghidra again (ghidra-mcp-up reopens the last one)
+    3. Open ghidra-project/project.gpr in Ghidra again (ghidra-mcp-up reopens the last one)
 EOF
             exit 1
         fi
-        echo "re: note: ghidra/project.lock exists but no Ghidra window runs (left over?); trying anyway" >&2
+        echo "re: note: ghidra-project/project.lock exists but no Ghidra window runs (left over?); trying anyway" >&2
     fi
 }
 

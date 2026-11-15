@@ -102,7 +102,8 @@ for the goal. Create it only when there is something to write.
 
 - Explanations and walkthroughs made for a task of the plan, as part of the
   planned research, carry the reference after the number, e.g.
-  `docs/walkthrough/003-02B-file-header/`, and the task's detail file links them.
+  `docs/walkthrough/003-02B-file-header.html` (or .md / .py), and the task's
+  detail file links them.
   Explanations made outside the plan get no reference.
 - LOG.md: an entry for work on a task names the task.
 - Cards carry no task references: they describe the function, wherever the

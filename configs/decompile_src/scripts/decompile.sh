@@ -9,6 +9,14 @@ set -euo pipefail
 
 IFS=$'\t' read -r ID BIN < <(re resolve "${1:-}")
 OUT="${2:-work/$ID.c}"
+
+# The output stays inside the project: these scripts run without a prompt
+# (.claude/settings.json), so an output path outside it would let anything that
+# steers the agent overwrite files elsewhere. INSIDE_OK=1 lifts the check.
+case "$(realpath -m "$OUT")/" in
+    "$(pwd -P)"/*) ;;
+    *) [[ "${INSIDE_OK:-}" == 1 ]] || { echo "$(basename "$0"): output must be inside the project directory: $OUT" >&2; exit 1; } ;;
+esac
 [[ -f "$BIN" ]] || { echo "No such file: $BIN" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 

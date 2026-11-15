@@ -2,7 +2,7 @@
 name: re-explain
 description: For a compiled binary without source code - verify how one part of the analyzed program works (a function, a group of functions, a file format, a feature). Every claim is numbered, checked independently and reviewed by a fresh agent; the result is docs/explain/<topic>.md. Use ONLY when the user asks to verify, check precisely, be exact or thorough, or prove it, or when the result will be the basis of a fix or a specification. An ordinary "how does this work" question is answered in the chat; "show me step by step" is /re-walkthrough.
 argument-hint: "<function | address | feature question> [--bin id] [--lang sl|en]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-explain/*), Bash(rabin2 *), Bash(readelf *), Bash(file *)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(outq *), Bash(re status), Bash(re get *), Bash(re path *), Bash(python3 ${CLAUDE_SKILL_DIR}/*), Bash(python3 .claude/skills/re-explain/*), Bash(readelf *), Bash(objdump *), Bash(file *), Bash(mdview *)
 ---
 
 # /re-explain - how one part of the analyzed binary works, with verified claims
@@ -48,7 +48,7 @@ record the result. Do not count re-reading the same pseudocode as a check.
 | --- | --- |
 | second caller / other xref | meaning of a parameter or return value |
 | known API documentation | types and meaning of values passed to OS/library calls |
-| assembly next to the pseudocode | signedness, sizes, calling convention, decompiler mistakes |
+| assembly next to the pseudocode (`outq -b <id> asm`, `objdump -d`) | signedness, sizes, calling convention, decompiler mistakes, arguments the pseudocode drops |
 | data in the binary (rabin2, ImHex, Python on the bytes) | constants, tables, embedded data |
 | a data file the program uses | file formats, offsets, field sizes |
 | Python re-implementation compared on examples | algorithms (checksums, encodings, math) |
@@ -139,7 +139,9 @@ and the claim IDs. There is no need to read `explain_check.py` to find this out.
 python3 ${CLAUDE_SKILL_DIR}/explain_check.py docs/explain/<file>.md
 ```
 
-Fix every ERROR and run it again. Do not edit `explain_check.py`.
+Fix every ERROR and run it again. Do not edit `explain_check.py`. Then
+`mdview docs/explain/<file>.md` writes the .html with the diagrams drawn, for the
+user to read.
 
 ## Step 6 - Update the function cards
 

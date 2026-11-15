@@ -188,6 +188,9 @@ const r = new marked.Renderer();
 r.code = function(t, lang){ if (typeof t === 'object') { lang = t.lang; t = t.text; }
   if (lang === 'mermaid') return '<pre class="mermaid">' + t.replace(/</g,'&lt;') + '</pre>';
   return '<pre><code>' + t.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</code></pre>'; };
+/* Raw HTML in the Markdown is shown as text: the document quotes strings from the
+   analyzed binary, which must never become live markup in this page. */
+r.html = function(t){ if (typeof t === 'object') t = t.text || t.raw || ''; return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
 let h = marked.parse(MD, {renderer: r});
 h = h.replace(/\[(C|H)\]/g, (m, s) => '<span class="' + s + '">' + (s === 'C' ? 'confirmed' : 'hypothesis') + '</span>');
 const doc = document.getElementById('doc');

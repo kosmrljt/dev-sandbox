@@ -3,7 +3,6 @@
   "permissions": {
     "allow": [
       "Bash(file *)",
-      "Bash(rabin2 *)",
       "Bash(readelf *)",
       "Bash(objdump *)",
       "Bash(strings *)",
@@ -15,6 +14,7 @@
       "Bash(exportjson.sh *)",
       "Bash(contextpack.sh *)",
       "Bash(decompile.sh *)",
+      "Bash(mdview *)",
       "Edit(review/**)",
       "Edit(work/**)",
       "Edit(LOG.md)",

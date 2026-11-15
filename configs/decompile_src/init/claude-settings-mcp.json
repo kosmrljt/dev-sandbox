@@ -7,7 +7,16 @@
       "mcp__ghidra__search_*",
       "mcp__ghidra__decompile_*",
       "mcp__ghidra__read_*",
-      "mcp__ghidra__force_decompile"
+      "mcp__ghidra__disassemble_*",
+      "mcp__ghidra__analysis_status",
+      "mcp__ghidra__check_tools",
+      "mcp__ghidra__force_decompile",
+      "mcp__ghidra__rename_function",
+      "mcp__ghidra__rename_variables",
+      "mcp__ghidra__batch_rename_function_components",
+      "mcp__ghidra__set_function_prototype",
+      "mcp__ghidra__set_variable_type",
+      "mcp__ghidra__add_function_tag"
     ]
   }
 }

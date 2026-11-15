@@ -6,10 +6,19 @@
 # is_external=true and no pseudocode, so `outq imports` and `outq sql` see them
 # for ELF and PE alike. Read with outq; run through exportjson.sh.
 #
+# Short strings that Ghidra leaves undefined (DAT_* holding "%s", "(%s)", " gid=%ju")
+# are read from memory and listed under "strings" with type "cstring?" (guessed),
+# so `outq strings` and `outq sql` see them; they stay in data_refs as well.
+#
+# Next to <output.json> it writes <output>.asm.json: {"<name>@<address>": [lines]},
+# the disassembly with Ghidra's names (CALL print_group, not CALL 0x104e80); read it
+# with `outq asm`. It is a separate file so that outq does not load it for every query.
+#
 # Args: <output.json>
 
 import json
 from ghidra.app.decompiler import DecompInterface
+from ghidra.program.model.listing import CodeUnitFormat
 from ghidra.util.task import ConsoleTaskMonitor
 
 args = getScriptArgs()
@@ -22,6 +31,33 @@ monitor = ConsoleTaskMonitor()
 
 decomp = DecompInterface()
 decomp.openProgram(prog)
+memory = prog.getMemory()
+CSTR_MAX = 512
+
+
+def guess_cstring(addr):
+    """Text at addr if it reads as a NUL-terminated string of printable ASCII
+    (tab/newline allowed) of at least 2 characters in an initialized, non-executable
+    block; else None. Used only for data Ghidra did not define as a string."""
+    blk = memory.getBlock(addr)
+    if blk is None or not blk.isInitialized() or blk.isExecute():
+        return None
+    out = []
+    try:
+        a = addr
+        for _ in range(CSTR_MAX):
+            b = memory.getByte(a) & 0xFF
+            if b == 0:
+                break
+            if not (32 <= b < 127 or b in (9, 10, 13)):
+                return None
+            out.append(chr(b))
+            a = a.next()
+        else:
+            return None
+    except Exception:
+        return None
+    return "".join(out) if len(out) >= 2 else None
 
 
 def refs(func):
@@ -50,7 +86,25 @@ def refs(func):
             else:
                 entry["label"] = d.getLabel()
                 datas.append(entry)
+                if low.startswith("undefined") or low in ("byte", "char"):
+                    txt = guess_cstring(to)
+                    if txt is not None:
+                        strings.append({"addr": str(to), "type": "cstring?", "value": txt})
     return strings, datas
+
+
+fmt = CodeUnitFormat.DEFAULT
+
+
+def disasm(func):
+    lines = []
+    for ins in listing.getInstructions(func.getBody(), True):
+        try:
+            text = fmt.getRepresentationString(ins)
+        except Exception:
+            text = str(ins)
+        lines.append("%s  %s" % (ins.getAddress(), text))
+    return lines
 
 
 def qname(f):
@@ -62,9 +116,11 @@ def qname(f):
 
 
 out = []
+asm = {}
 fm = prog.getFunctionManager()
 for func in fm.getFunctions(True):
     strings, datas = refs(func)
+    asm[qname(func) + "@" + str(func.getEntryPoint())] = disasm(func)
     res = decomp.decompileFunction(func, 60, monitor)
     code = res.getDecompiledFunction().getC() if (res and res.decompileCompleted()) else None
     out.append({
@@ -99,4 +155,8 @@ for func in fm.getExternalFunctions():
 f = open(outpath, "w")
 json.dump(out, f, indent=1)
 f.close()
-print("Exported %d functions to %s" % (len(out), outpath))
+asmpath = (outpath[:-5] if outpath.endswith(".json") else outpath) + ".asm.json"
+f = open(asmpath, "w")
+json.dump(asm, f)
+f.close()
+print("Exported %d functions to %s (disassembly: %s)" % (len(out), outpath, asmpath))

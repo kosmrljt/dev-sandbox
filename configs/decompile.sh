@@ -46,6 +46,7 @@ PROFILE_decompile_DNF=(
     java-25-openjdk
     gdb upx innoextract unshield cabextract
     patchelf
+    chromium-headless
 )
 
 # ROOT stage (before USER dev) — installs the RE toolchain into the image, so a

@@ -2,7 +2,9 @@
 # decompile-init - scaffold a reverse-engineering project in the current dir.
 # Usage:
 #   decompile-init          CLAUDE.md, NOTES.md, review/, work/, .claude/ (settings, skills, kb)
-#   decompile-init --mcp    also .mcp.json + Ghidra read permissions (live MCP loop)
+#   decompile-init --mcp    also .mcp.json + Ghidra MCP permissions (live MCP loop)
+#   decompile-init --mcp-only   only .mcp.json + Ghidra MCP permissions, nothing else
+#                           (re init --live uses it in an existing project)
 #   decompile-init --migrate  bring a project made with an older version up to date:
 #                           CLAUDE.md, skills and kb replaced (old ones kept in .claude/old/),
 #                           new permissions added, results moved under docs/
@@ -17,12 +19,14 @@ set -euo pipefail
 INIT="${DECOMPILE_INIT:-/opt/ctx/init}"
 GUIDE="${DECOMPILE_DOC:-/opt/ctx/docs}/GUIDE.md"
 WANT_MCP=0
+MCP_ONLY=0
 MIGRATE=0
 TARGET="."
 
 for a in "$@"; do
     case "$a" in
         --mcp)     WANT_MCP=1 ;;
+        --mcp-only) WANT_MCP=1; MCP_ONLY=1 ;;
         --migrate) MIGRATE=1 ;;
         -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
         -*)        echo "unknown option: $a" >&2; exit 2 ;;
@@ -58,12 +62,17 @@ keep_old() {
 if [[ "$MIGRATE" == 1 && -e "$TARGET/CLAUDE.md" ]] && ! cmp -s "$INIT/CLAUDE.md" "$TARGET/CLAUDE.md"; then
     keep_old CLAUDE.md
 fi
-put "$INIT/CLAUDE.md" CLAUDE.md
+[[ "$MCP_ONLY" == 1 ]] || put "$INIT/CLAUDE.md" CLAUDE.md
 
 # Permissions: read-only RE tools (file, rabin2, readelf, objdump, strings and
 # the export scripts) run without a prompt. Running the analyzed program, gdb,
 # strace/ltrace and anything that changes files still asks.
-put "$INIT/claude-settings.json" .claude/settings.json
+if [[ "$MCP_ONLY" == 1 ]]; then
+    # only the MCP permissions are added below; an empty file to add them to
+    [[ -e "$TARGET/.claude/settings.json" ]] || { echo '{}' > "$TARGET/.claude/settings.json"; echo "+ .claude/settings.json"; }
+else
+    put "$INIT/claude-settings.json" .claude/settings.json
+fi
 
 # add_perms <template.json> <what>: add the template's allow/ask entries to
 # settings.json. Additive only: what you already have stays untouched.
@@ -95,8 +104,9 @@ PY
 
 if [[ "$WANT_MCP" == 1 ]]; then
     put "$INIT/.mcp.json" .mcp.json
-    add_perms "$INIT/claude-settings-mcp.json" "Ghidra MCP read permissions"
+    add_perms "$INIT/claude-settings-mcp.json" "Ghidra MCP permissions"
 fi
+[[ "$MCP_ONLY" == 1 ]] && exit 0
 
 mkdir -p "$TARGET/review" "$TARGET/work"
 put "$INIT/NOTES.md" NOTES.md
@@ -137,7 +147,9 @@ done
 
 # Skills that were renamed (old-name:new-name) or removed (old-name:). A project set up with an older
 # version still has the old folder, so both would show up in the / menu.
-RENAMED=(archmap:re-map archdoc:re-doc explain:re-explain re-code: re-port:)
+# re-code and re-port ship in init/skills/: they must not be listed here, or
+# --migrate would move them to .claude/old/ right after installing them.
+RENAMED=(archmap:re-map archdoc:re-doc explain:re-explain)
 stale=()
 for pair in "${RENAMED[@]}"; do
     old="${pair%%:*}"; new="${pair##*:}"
@@ -175,6 +187,24 @@ for r in ARCHITECTURE.md map explain spec walkthrough; do
         moved_results+=("$r")
     fi
 done
+# The Ghidra project was ghidra/project.gpr; now it is ghidra-project/project.gpr.
+# (A folder named ghidra/ in the project directory hides the Java package
+# "ghidra" from Python, so `import pyghidra` there failed with RecursionError.)
+old_project=0
+if [[ -f "$TARGET/ghidra/project.gpr" && ! -e "$TARGET/ghidra-project" ]]; then
+    if [[ "$MIGRATE" == 1 ]]; then
+        if compgen -G "$TARGET/ghidra/project.lock*" >/dev/null \
+           && pgrep -f 'ghidra\.GhidraRun|ghidra\.GhidraLauncher|pyghidraRun|pyghidra.*(-g|--gui)' >/dev/null 2>&1; then
+            echo "! ghidra/ not moved: the project is open in the Ghidra window."
+            echo "  Close it there (File > Close Project, or ghidra-bg stop) and run decompile-init --migrate again."
+        else
+            mv "$TARGET/ghidra" "$TARGET/ghidra-project" && rm -f "$TARGET"/ghidra-project/project.lock* \
+                && echo "> ghidra/ moved to ghidra-project/ (in Ghidra, open ghidra-project/project.gpr from now on)"
+        fi
+    else
+        old_project=1
+    fi
+fi
 # Cards of an older version are flat in review/; now they are in review/<id>/.
 if [[ "$MIGRATE" == 1 ]] && compgen -G "$TARGET/review/*.md" >/dev/null; then
     if [[ -f "$TARGET/decompile.yaml" ]] && cur="$(cd "$TARGET" && re get current 2>/dev/null)" && [[ -n "$cur" ]]; then
@@ -182,6 +212,11 @@ if [[ "$MIGRATE" == 1 ]] && compgen -G "$TARGET/review/*.md" >/dev/null; then
     else
         echo "  review/*.md: re init <binary> moves these cards into review/<id>/"
     fi
+fi
+if (( old_project )); then
+    echo
+    echo "NOTE: the Ghidra project is still in ghidra/; this version uses ghidra-project/."
+    echo "      Move it (with the Ghidra window closed) with:  decompile-init --migrate${TARGET:+ $TARGET}"
 fi
 if (( ${#moved_results[@]} )); then
     echo

@@ -512,11 +512,16 @@ def main():
         sys.exit(2)
     for w in WARNINGS:
         print("WARNING: " + w)
-    own = len(export) - len(stubs)
+    # Count entries, not names: an import appears several times under one name
+    # (<EXTERNAL>::printf as external function and as one or more thunks), so
+    # len(export) - len(stubs) would count the duplicates as the program's own.
+    n_stubs = sum(1 for f in export if f.get("is_thunk") or f.get("is_external"))
+    own_names = {f["name"] for f in export if not f.get("is_thunk") and not f.get("is_external")}
+    own = len(own_names)
     placed = {fn for m in mods.get("modules", []) for fn in m["functions"]}
     counts = ("%d functions in the export = %d thunks/externals + %d of the program's own; "
               "of those %d placed in modules, %d not placed%s"
-              % (len(export), len(stubs), own, len(placed - stubs), own - len(placed - stubs),
+              % (len(export), n_stubs, own, len(placed & own_names), own - len(placed & own_names),
                  "; plus %d stubs placed" % len(placed & stubs) if placed & stubs else ""))
     if a.check:
         print("modules.json OK")
