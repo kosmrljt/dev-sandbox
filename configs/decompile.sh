@@ -1,6 +1,10 @@
 # decompile.sh — dev-sandbox profile for binary reverse engineering, with a
 # VNC desktop for the Ghidra GUI.
 #
+# DISCLAIMER: Provided solely for authorized security auditing, interoperability
+# analysis, malware triage, and debugging of software you own or have explicit
+# permission to inspect. The author assumes no responsibility for misuse.
+#
 # The scripts ship in ./decompile_src (next to this config). 
 # To refresh after editing ./decompile_src:  rm -rf ~/.dev-sandbox/decompile/ctx
 # (the next run re-stages, which changes ctx and triggers a rebuild).
