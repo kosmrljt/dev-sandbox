@@ -720,7 +720,8 @@ USER root
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/entrypoint.sh"]
+
 CMD ["/bin/bash"]
 DEOF
 }
