@@ -710,6 +710,8 @@ ${ctx_copy}
 
 ${dnf_line}
 
+RUN dnf install -y tini && dnf clean all
+
 ${tools_runs}
 USER dev
 ${agent_runs}
@@ -718,7 +720,7 @@ USER root
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["/bin/bash"]
 DEOF
 }

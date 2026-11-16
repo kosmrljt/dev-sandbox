@@ -27,6 +27,7 @@
  .try{background:var(--try);border:1px solid var(--tryline)} .try h3{color:#2b6b3a}
  .check{background:#fbf8ef;border:1px solid #e3d6a8} .check h3{color:#7a5d0a}
  .check .a{margin-top:8px;padding-top:8px;border-top:1px dashed #e3d6a8}
+ .check .item + .item{margin-top:16px;padding-top:12px;border-top:1px solid #e3d6a8} .check .w-btn{margin-top:6px}
  .w-row{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;margin:6px 0}
  .w-grid{display:inline-grid;gap:1px;background:var(--line);border:1px solid var(--line);user-select:none}
  .w-grid div{width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;font-size:11px}
@@ -151,10 +152,11 @@ function show(i) {
     try { s.widget(b, W); } catch (e) { const p = document.createElement('pre'); p.textContent = 'widget error: ' + e; b.appendChild(p); } }
   $('check').innerHTML = '';
   if (s.check) { const b = box('check', 'Check yourself'); $('check').appendChild(b);
-    [].concat(s.check).forEach(c => { const q = document.createElement('div'); q.innerHTML = c.q; b.appendChild(q);
+    [].concat(s.check).forEach(c => { const it = document.createElement('div'); it.className = 'item'; b.appendChild(it);
+      const q = document.createElement('div'); q.innerHTML = c.q; it.appendChild(q);
       const a = document.createElement('div'); a.className = 'a'; a.innerHTML = c.a; a.hidden = true;
-      const btn = W.button(b, 'Show answer', () => { a.hidden = !a.hidden; btn.textContent = a.hidden ? 'Show answer' : 'Hide answer'; });
-      b.appendChild(a); }); }
+      const btn = W.button(it, 'Show answer', () => { a.hidden = !a.hidden; btn.textContent = a.hidden ? 'Show answer' : 'Hide answer'; });
+      it.appendChild(a); }); }
   $('ref').textContent = s.ref || '';
   document.querySelectorAll('nav button').forEach((b, k) => b.classList.toggle('on', k === cur));
   $('prev').disabled = cur === 0; $('next').disabled = cur === STEPS.length - 1;
