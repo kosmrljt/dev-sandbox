@@ -6,6 +6,13 @@ reverse-engineering tools, a few commands, and Claude Code with ready-made
 procedures (skills). One rule runs through everything: a claim needs evidence
 (an address, a value, a cross-reference); guesses are marked as such.
 
+> **Authorized use only:** This environment is built for legitimate security
+> auditing, interoperability analysis, malware triage, and debugging of
+> binaries you own or have explicit permission to inspect. Do not use it to
+> bypass licensing, infringe copyright, or analyze unauthorized software.
+> You are solely responsible for complying with applicable laws.
+
+
     1. First project         5. Skills                 9. Evidence first
     2. Project structure     6. Ghidra window         10. Upgrading a project
     3. Kinds of files        7. Delphi, Linux         11. If something goes wrong
