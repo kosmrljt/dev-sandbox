@@ -1161,7 +1161,7 @@ do_build() {
 # ── Sandbox name (container <profile>-<name>, mount /app/<name>) ──
 # If <project>/.dev-sandbox/name exists, its (single) line is the name; otherwise
 # the name is computed from the directory path. Both functions are also available
-# to --config files (e.g. name.sh), which are sourced after this point.
+# to --config files (e.g. pin_name.sh), which are sourced after this point.
 SANDBOX_NAME_FILE=".dev-sandbox/name"
 
 # Default name: <basename>-<md5(path)[0:6]> (unchanged formula, keeps existing containers)
