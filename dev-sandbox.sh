@@ -204,6 +204,11 @@ alias ...="cd ../.."
 
 # tmux with custom config
 alias tmux="tmux -f ~/.local/etc/tmux.conf"
+
+# Project-specific shell settings (also for SSH sessions)
+if [ -n "${SANDBOX_PROJECT_DIR:-}" ] && [ -f "${SANDBOX_PROJECT_DIR}/.dev-sandbox/bashrc" ]; then
+    source "${SANDBOX_PROJECT_DIR}/.dev-sandbox/bashrc"
+fi
 '
     'tmux.conf|# Minimal status bar
 set -g status-style "bg=default,fg=colour8"
