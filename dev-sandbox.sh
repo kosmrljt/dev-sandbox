@@ -1158,6 +1158,30 @@ do_build() {
 #  Assemble podman flags, start container, display startup info
 # ═══════════════════════════════════════════════════════════════════════
 
+# ── Sandbox name (container <profile>-<name>, mount /app/<name>) ──
+# If <project>/.dev-sandbox/name exists, its (single) line is the name; otherwise
+# the name is computed from the directory path. Both functions are also available
+# to --config files (e.g. name.sh), which are sourced after this point.
+SANDBOX_NAME_FILE=".dev-sandbox/name"
+
+# Default name: <basename>-<md5(path)[0:6]> (unchanged formula, keeps existing containers)
+sandbox_default_name() {
+    local dir="$1" dir_name path_hash
+    dir_name="$(basename "$dir" | tr -cs 'A-Za-z0-9-' '-')"
+    path_hash="$(echo -n "$dir" | md5sum | cut -c1-6)"
+    echo "${dir_name}-${path_hash}"
+}
+
+# Make any string a valid podman name: č/ć→c, š→s, ž→z, đ→d (and uppercase),
+# other characters outside [A-Za-z0-9_.-] → '-', leading non-alphanumerics removed.
+# Prints an empty string if nothing usable remains.
+sandbox_sanitize_name() {
+    local n="$1"
+    n="${n//č/c}"; n="${n//ć/c}"; n="${n//š/s}"; n="${n//ž/z}"; n="${n//đ/d}"
+    n="${n//Č/C}"; n="${n//Ć/C}"; n="${n//Š/S}"; n="${n//Ž/Z}"; n="${n//Đ/D}"
+    printf '%s' "$n" | LC_ALL=C sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^[^A-Za-z0-9]+//'
+}
+
 do_run() {
     local profile="$1"
     shift
@@ -1187,11 +1211,21 @@ do_run() {
     local project_dir
     project_dir="$(pwd)"
 
-    local dir_name
-    dir_name="$(basename "$project_dir" | tr -cs 'A-Za-z0-9-' '-')"
-    local path_hash
-    path_hash="$(echo -n "$project_dir" | md5sum | cut -c1-6)"
-    local mount_name="${dir_name}-${path_hash}"
+    local mount_name
+    if [[ -f "${project_dir}/${SANDBOX_NAME_FILE}" ]]; then
+        # Pinned name: survives moving/copying the project directory
+        if (( $(wc -l < "${project_dir}/${SANDBOX_NAME_FILE}") > 1 )); then
+            err "${SANDBOX_NAME_FILE} must contain a single line"
+            exit 1
+        fi
+        mount_name="$(sandbox_sanitize_name "$(cat "${project_dir}/${SANDBOX_NAME_FILE}")")"
+        if [[ -z "$mount_name" ]]; then
+            err "${SANDBOX_NAME_FILE} contains no usable name"
+            exit 1
+        fi
+    else
+        mount_name="$(sandbox_default_name "$project_dir")"
+    fi
     local container_name="${profile}-${mount_name}"
     local mount_point="/app/${mount_name}"
 
