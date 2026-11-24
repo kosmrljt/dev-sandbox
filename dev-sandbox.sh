@@ -205,13 +205,25 @@ alias ...="cd ../.."
 # tmux with custom config
 alias tmux="tmux -f ~/.local/etc/tmux.conf"
 '
-    'tmux.conf|# Minimal status bar
+    'tmux.conf|# --- Minimal status bar ---
 set -g status-style "bg=default,fg=colour8"
 set -g status-left "#[fg=colour4]#S "
 set -g status-right "#[fg=colour8]%H:%M"
 set -g status-left-length 20
 setw -g window-status-current-style "fg=colour2"
 setw -g window-status-style "fg=colour8"
+# --- Mouse support, scrollback history & numbering ---
+set -g mouse on
+set -g history-limit 50000
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
+# --- Responsiveness & 24-bit TrueColor ---
+set -sg escape-time 10
+set -g default-terminal "tmux-256color"
+set -ag terminal-overrides ",xterm-256color:RGB"
+# --- Open a floating terminal popup with Ctrl + b + p
+bind p display-popup -E -w 80% -h 80%
 '
 )
 
